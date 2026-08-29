@@ -1,0 +1,697 @@
+---
+title: "Tugas Pertemuan 2"
+author: "Qurrota A'yunina"
+date: "2026-08-29"
+output: 
+   html_document:
+    theme: lumen
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    code_folding: hide
+---
+
+# Library/Packages
+
+```{r}
+library("forecast")
+library("graphics")
+library("TTR")
+library("TSA")
+library("rio")
+library("ggplot2")
+```
+
+# Impor Data & Agregasi
+Mengagregasi data 10-menitan menjadi data rata-rata per jam (setiap 6 baris = 1 jam), kemudian mengambil 100 jam pertama.
+
+```{r}
+# Impor data mentah
+data_raw <- import("Data Suhu MPDW.csv")
+
+# Ambil 600 baris pertama (600 / 6 = 100 jam)
+data_sub <- data_raw[1:600, ]
+
+# Rata-rata per 6 baris (1 jam)
+suhu_jam <- aggregate(data_sub$`T (degC)`, 
+                      by = list(Periode = (0:599) %/% 6 + 1), 
+                      FUN = mean)$x
+
+# Buat dataframe 100 data pertama
+data100 <- data.frame(
+  Periode = 1:100,
+  Suhu = suhu_jam
+)
+
+head(data100)
+```
+
+# Eksplorasi Data
+Mengubah data agar terbaca sebagai data deret waktu dengan fungsi ts().
+
+```{r}
+data100.ts <- ts(data100$Suhu)
+
+View(data100)
+str(data100)
+dim(data100)
+summary(data100.ts)
+
+ts.plot(data100.ts, xlab="Periode Waktu (Jam)", ylab="Suhu (°C)", 
+        main = "Time Series Plot Suhu 100 Jam Pertama")
+points(data100.ts)
+```
+
+Berdasarkan grafik Time Series Plot Suhu 100 Jam Pertama, dapat diamati beberapa karakteristik utama dari pergerakan data suhu:
+- Karakteristik Tren: Data menunjukkan kecenderungan tren naik secara umum (overall upward trend). Suhu bergerak dari titik terendahnya yang mencapai sekitar $-10^\circ\text{C}$ (sekitar jam ke-6 dan jam ke-57) menuju titik tertinggi mendekati $-1^\circ\text{C}$ pada kisaran jam ke-80, lalu cenderung stabil melandai hingga jam ke-100.
+
+- Pola Non-Musiman (Non-Seasonal): Fluktuasi naik-turun suhu tidak menunjukkan perulangan pola yang tetap atau siklus dengan interval waktu yang konstan (no regular seasonality).
+
+- Volatilitas / Perubahan Tajam: Terdapat penurunan drastis pada jam ke-40 hingga jam ke-57, yang diikuti oleh lonjakan kenaikan yang sangat tajam pada jam ke-58 hingga jam ke-63.
+
+- Implikasi Pemilihan Metode Pemulusan: Karena grafik menunjukkan adanya komponen tren tanpa pola musiman berulang yang teratur, metode peramalan yang berfokus pada pemulusan tren (seperti Double Exponential Smoothing / DES) diprediksi akan lebih cocok dibandingkan metode pemulusan konstan (SMA/SES) maupun metode musiman (Holt-Winters Winter).
+
+
+# Pembagian Data Latih dan Data Uji
+Pembagian data latih dan data uji dilakukan dengan perbandingan 80% data latih dan 20% data uji.
+
+```{r}
+n <- nrow(data100)
+n_train <- floor(0.8 * n) # 80 data latih
+
+training <- data100[1:n_train, ]
+testing  <- data100[(n_train+1):n, ]
+
+train.ts <- ts(training$Suhu)
+test.ts  <- ts(testing$Suhu)
+```
+
+
+Plot pembagian data menggunakan ggplot2
+
+```{r}
+ggplot() + 
+  geom_line(data = training, aes(x = Periode, y = Suhu, col = "Data Latih")) +
+  geom_line(data = testing, aes(x = Periode, y = Suhu, col = "Data Uji")) +
+  labs(x = "Periode Waktu (Jam)", y = "Suhu (°C)", color = "Legend") +
+  scale_colour_manual(name="Keterangan:", breaks = c("Data Latih", "Data Uji"),
+                      values = c("blue", "red")) + 
+  theme_bw() + theme(legend.position = "bottom",
+                     plot.caption = element_text(hjust=0.5, size=12))
+```
+
+Berdasarkan grafik pembagian data deret waktu di atas, 100 observasi data suhu dibagi menjadi dua subset data dengan proporsi 80:20, yaitu:
+
+1. Data Latih (Training Data) — Garis Biru:
+
+- Terdiri dari 80 observasi pertama (periode jam ke-1 hingga jam ke-80).Data latih ini mencakup pergerakan tren utama dan fluktuasi ekstrem suhu, mulai dari penurunan di awal, tren naik menuju jam ke-40, penurunan tajam di jam ke-57, hingga kembali naik tajam ke jam ke-80.
+- Bagian ini digunakan untuk membentuk model serta mengestimasi parameter pemulusan.
+
+2. Data Uji (Testing Data) — Garis Merah:
+
+- Terdiri dari 20 observasi terakhir (periode jam ke-81 hingga jam ke-100).Data uji menunjukkan pola pergerakan suhu yang relatif stabil melandai pada kisaran $-1^\circ\text{C}$ hingga $-2^\circ\text{C}$. 
+- Bagian ini diisolasi dari pembentukan model dan digunakan khusus untuk menguji keakuratan peramalan (out-of-sample forecast) menggunakan metrik seperti SSE, MSE, dan MAPE.
+
+
+# Moving Average
+
+## Single Moving Average (SMA)
+Pemulusan SMA dilakukan dengan fungsi SMA() menggunakan parameter m=4.
+
+```{r}
+data.sma <- SMA(train.ts, n = 4)
+
+# Peramalan 1 periode ke depan
+data.ramal <- c(NA, data.sma)
+
+# Peramalan 20 periode ke depan (sesuai jumlah data uji)
+data.gab <- cbind(
+  aktual = c(data100.ts),
+  pemulusan = c(data.sma, rep(NA, 20)),
+  ramalan = c(data.ramal, rep(data.ramal[length(data.ramal)], 19)))
+
+# Plot SMA
+ts.plot(data100.ts, xlab="Periode Waktu (Jam)", ylab="Suhu (°C)", main= "SMA N=4 Data Suhu")
+points(data100.ts)
+lines(data.gab[,2], col="green", lwd=2)
+lines(data.gab[,3], col="red", lwd=2)
+legend("topleft", c("data aktual","data pemulusan","data peramalan"), lty=1, col=c("black","green","red"), cex=0.6)
+```
+
+Berdasarkan grafik **SMA N=4 Data Suhu** di atas, diperoleh beberapa poin interpretasi hasil metode *Single Moving Average* (SMA) dengan ordo $N = 4$:
+
+1. **Data Pemulusan / *In-Sample* (Garis Hijau):**
+
+> * Garis pemulusan (hijau) dimulai dari periode jam ke-4 karena menggunakan $N = 4$ (3 periode awal tidak memiliki nilai pemulusan).
+> * Garis hijau berfungsi menghaluskan fluktuasi acak data aktual (garis hitam). Namun, terlihat adanya **keterlambatan (*lag/lagging*)** di mana garis pemulusan selalu terlambat mengikuti arah perubahan data aktual, terutama saat terjadi pergerakan naik atau turun yang tajam (seperti pada jam ke-50 hingga jam ke-65).
+
+2. **Data Peramalan / *Out-of-Sample* (Garis Merah):**
+> * Pada data latih (jam ke-5 hingga jam ke-80), garis peramalan (merah) merupakan pergeseran 1 periode ke depan ($t+1$) dari garis pemulusan, sehingga efek *lagging* terlihat semakin jelas.
+> * Pada data uji (jam ke-81 hingga jam ke-100), peramalan metode SMA menghasilkan **garis lurus mendatar (*konstan*)**. Hal ini sesuai dengan sifat matematis metode SMA, di mana nilai ramalan untuk seluruh periode ke depan merupakan rata-rata dari 4 data terakhir pada data latih.
+
+3. **Keterbatasan Metode:**
+> * Karena hasil ramalan pada data uji berbentuk garis lurus konstan, metode SMA kurang responsif terhadap pola data yang memiliki komponen tren jangka panjang.
+
+
+### Akurasi Data Latih dan Data Uji SMA
+
+```{r}
+# Akurasi Data Latih
+error_train.sma <- train.ts - data.gab[1:80, 3]
+SSE_train.sma  <- sum(error_train.sma^2, na.rm = TRUE)
+MSE_train.sma  <- mean(error_train.sma^2, na.rm = TRUE)
+MAPE_train.sma <- mean(abs(error_train.sma / train.ts * 100), na.rm = TRUE)
+
+# Akurasi Data Uji
+error_test.sma  <- test.ts - data.gab[81:100, 3]
+SSE_test.sma   <- sum(error_test.sma^2, na.rm = TRUE)
+MSE_test.sma   <- mean(error_test.sma^2, na.rm = TRUE)
+MAPE_test.sma  <- mean(abs(error_test.sma / test.ts * 100), na.rm = TRUE)
+
+# Penggabungan Matriks
+akurasi_sma <- cbind(
+  "Training" = c(SSE_train.sma, MSE_train.sma, MAPE_train.sma),
+  "Testing"  = c(SSE_test.sma, MSE_test.sma, MAPE_test.sma)
+)
+row.names(akurasi_sma) <- c("SSE", "MSE", "MAPE")
+akurasi_sma
+```
+
+Berdasarkan tabel evaluasi akurasi metode **SMA ($N=4$)**, diperoleh beberapa catatan penting terkait performa model pada data latih (*training*) dan data uji (*testing*):
+
+1. **Evaluasi Data Latih (*In-Sample Accuracy*):**
+> * **MSE Data Latih:** $1{,}5147$
+> * **MAPE Data Latih:** $25{,}1296\%$
+> * Pada data latih, metode SMA menghasilkan rata-rata persentase kesalahan sebesar $25{,}13\%$. Nilai error yang relatif lebih besar ini disebabkan oleh sifat metode SMA yang mengalami keterlambatan (*lagging*) saat mengikuti fluktuasi dan perubahan arah tren data suhu yang tajam.
+
+2. **Evaluasi Data Uji (*Out-of-Sample Accuracy*):**
+> * **MSE Data Uji:** $0{,}0811$
+> * **MAPE Data Uji:** $22{,}3822\%$
+> * Pada data uji (20 periode terakhir), nilai MSE dan MAPE turun signifikan menjadi $0{,}0811$ dan $22{,}38\%$. Penurunan error ini terjadi karena pergerakan data aktual suhu pada 20 jam terakhir cenderung stabil dan melandai, sehingga ramalan konstan (garis lurus) dari SMA kebetulan berada dekat dengan rata-rata nilai aktualnya.
+
+3. **Kesimpulan Kinerja SMA:**
+> * Dengan persentase kesalahan (MAPE) berkisar antara $22\%$ hingga $25\%$, kriteria kemampuan peramalan metode SMA pada data suhu ini berada dalam kategori **cukup (*reasonable forecast*)**.
+
+
+## Double Moving Average (DMA)
+
+```{r}
+dma <- SMA(data.sma, n = 4)
+At <- 2 * data.sma - dma
+Bt <- 2 / (4 - 1) * (data.sma - dma)
+data.dma <- At + Bt
+data.ramal2 <- c(NA, data.dma)
+
+t = 1:20
+f = c()
+for (i in t) {
+  f[i] = At[length(At)] + Bt[length(Bt)] * (i)
+}
+
+data.gab2 <- cbind(aktual = c(data100.ts), 
+                   pemulusan1 = c(data.sma, rep(NA, 20)),
+                   pemulusan2 = c(dma, rep(NA, 20)),
+                   At = c(At, rep(NA, 20)), 
+                   Bt = c(Bt, rep(NA, 20)),
+                   ramalan = c(data.ramal2, f[-1]))
+
+# Plot DMA
+ts.plot(data100.ts, xlab="Periode Waktu (Jam)", ylab="Suhu (°C)", main= "DMA N=4 Data Suhu")
+points(data100.ts)
+lines(data.gab2[,3], col="green", lwd=2)
+lines(data.gab2[,6], col="red", lwd=2)
+legend("topleft", c("data aktual","data pemulusan","data peramalan"), lty=1, col=c("black","green","red"), cex=0.6)
+```
+
+Berdasarkan grafik **DMA N=4 Data Suhu** di atas, diperoleh beberapa poin interpretasi hasil metode *Double Moving Average* (DMA) dengan ordo $N = 4$:
+
+1. **Data Pemulusan Ganda (Garis Hijau):**
+> * Pemulusan kedua (garis hijau) baru dimulai dari periode jam ke-7 karena membutuhkan pemulusan bertingkat dari $N = 4$ ($2N-1 = 7$).
+> * Garis pemulusan hijau berada di bawah atau di atas garis data aktual untuk membentuk estimasi komponen tren ($a_t$ dan $b_t$).
+
+2. **Data Peramalan / *Fitting* dan *Out-of-Sample* (Garis Merah):**
+> * **Pada Data Latih (Jam ke-8 hingga ke-80):** Garis peramalan (merah) lebih responsif dalam menangkap pola tren kenaikan maupun penurunan dibandingkan SMA, karena DMA menambahkan komponen kemiringan (*slope*). Namun, ketika terjadi perubahan mendadak/fluktuasi ekstrem (seperti pada jam ke-57 hingga ke-65), garis peramalan mengalami pembalikan tren yang sangat sensitif sehingga menembus batas grafik (*overshoot*).
+> * **Pada Data Uji (Jam ke-81 hingga ke-100):** Garis peramalan (merah) melambung naik secara linier meninggalkan batas grafik atas (*soaring upward*). Hal ini terjadi karena estimasi tren $b_t$ pada titik akhir data latih bernilai positif cukup besar, sehingga proyeksi ramalan jangka panjang terus bertambah naik secara konstan.
+
+3. **Evaluasi Metode:**
+> * Metode DMA terbukti sangat sensitif terhadap perubahan lokal di akhir data latih. Karena data uji aktualnya relatif stabil/melandai, proyeksi linier menanjak dari DMA menghasilkan tingkat kesalahan (*error*) yang sangat besar pada data uji.
+
+
+### Akurasi Data Latih dan Data Uji DMA
+
+```{r}
+# --- 1. Akurasi Data Latih (Training Data) DMA ---
+# Catatan: DMA m=4 menghasilkan nilai NA pada periode awal (baris 1 s.d. 6), 
+# sehingga digunakan na.rm = TRUE agar nilai NA diabaikan dalam perhitungan.
+
+error_train.dma <- train.ts - data.gab2[1:80, 6]
+
+SSE_train.dma  <- sum(error_train.dma^2, na.rm = TRUE)
+MSE_train.dma  <- mean(error_train.dma^2, na.rm = TRUE)
+MAPE_train.dma <- mean(abs(error_train.dma / train.ts * 100), na.rm = TRUE)
+
+# --- 2. Akurasi Data Uji (Testing Data) DMA ---
+error_test.dma  <- test.ts - data.gab2[81:100, 6]
+
+SSE_test.dma   <- sum(error_test.dma^2, na.rm = TRUE)
+MSE_test.dma   <- mean(error_test.dma^2, na.rm = TRUE)
+MAPE_test.dma  <- mean(abs(error_test.dma / test.ts * 100), na.rm = TRUE)
+
+# --- 3. Penggabungan Matriks Akurasi DMA ---
+akurasi_dma <- cbind(
+  "Training DMA" = c(SSE_train.dma, MSE_train.dma, MAPE_train.dma),
+  "Testing DMA"  = c(SSE_test.dma, MSE_test.dma, MAPE_test.dma)
+)
+row.names(akurasi_dma) <- c("SSE", "MSE", "MAPE")
+akurasi_dma
+```
+
+Berdasarkan tabel evaluasi akurasi metode **DMA ($N=4$)**, diperoleh beberapa poin pembahasan terkait kinerja model pada data latih (*training*) dan data uji (*testing*):
+
+1. **Evaluasi Data Latih (*In-Sample Accuracy*):**
+> * **MSE Data Latih:** $1{,}4656$
+> * **MAPE Data Latih:** $19{,}7978\%$
+> * Pada data latih, metode DMA menunjukkan kinerja fitting yang presisi dengan persentase kesalahan di bawah $20\%$. Nilai MSE dan MAPE pada data latih ini lebih kecil dibandingkan metode SMA ($1{,}5147$ dan $25{,}13\%$) karena komponen kemiringan tren ($b_t$) pada DMA mampu menyesuaikan perubahan arah data historis dengan lebih baik.
+
+2. **Evaluasi Data Uji (*Out-of-Sample Accuracy*):**
+> * **MSE Data Uji:** $10{,}1867$
+> * **MAPE Data Uji:** $199{,}0422\%$
+> * Pada data uji (20 periode terakhir), nilai MSE dan MAPE mengalami lonjakan ekstrem (MAPE mendekati $200\%$). Lonjakan error yang sangat tinggi ini terjadi karena persamaan proyeksi linier DMA memproyeksikan tren naik secara terus-menerus ke masa depan, sementara data suhu aktual pada periode uji justru bergerak melandai dan stabil di kisaran $-1^\circ\text{C}$ hingga $-2^\circ\text{C}$.
+
+3. **Kesimpulan Kinerja DMA:**
+> * Meskipun metode DMA sangat baik dalam mencocokkan data historis (*good in-sample fit*), metode ini **sangat tidak direkomendasikan untuk peramalan jangka panjang** (*poor out-of-sample forecast*) pada dataset suhu ini karena sifat proyeksi liniernya yang terlalu sensitif terhadap tren di akhir periode latih.
+
+
+# Exponential Smoothing
+
+## Single Exponential Smoothing (SES)
+Menggunakan fungsi HoltWinters() dengan parameter optimum (alpha = NULL).
+
+```{r}
+HWopt <- HoltWinters(train.ts, gamma = FALSE, beta = FALSE, alpha = NULL)
+ramalanopt <- forecast(HWopt, h = 20)
+
+plot(HWopt)
+plot(ramalanopt)
+```
+
+Berdasarkan grafik **Holt-Winters filtering** dan **Forecasts from HoltWinters** untuk metode **Single Exponential Smoothing (SES)** di atas, diperoleh beberapa poin interpretasi:
+
+1. **Pemasangan Model pada Data Latih (*Holt-Winters Filtering*):**
+> * Garis merah (*fitted values*) menunjukkan hasil pemulusan SES pada data latih (periode ke-1 hingga ke-80).
+> * Garis *fitted* mampu mengikuti pola pergerakan data aktual (garis hitam) dengan sangat rapat (*good fit*), hanya terdapat sedikit keterlambatan (*lag*) 1 periode di setiap fluktuasi. Hal ini mengindikasikan parameter pemulusan $\alpha$ (*alpha*) yang digunakan relatif tinggi/optimum sehingga model cukup responsif terhadap perubahan data historis terbaru.
+
+2. **Hasil Peramalan Data Uji (*Forecasts from HoltWinters*):**
+> * Garis biru mendatar (*horizontal line*) menunjukkan hasil peramalan SES untuk 20 periode ke depan (jam ke-81 hingga ke-100).
+> * Sesuai dengan karakteristik matematis metode SES (pemulusan tunggal untuk data tanpa tren dan musiman), nilai ramalan ke depan berbentuk **konstan** yang nilainya sama persis dengan estimasi level terakhir pada akhir data latih (periode ke-80).
+> * Area berbayang abu-abu muda dan abu-abu tua menggambarkan selang kepercayaan (*confidence interval*) $80\%$ dan $95\%$ dari hasil peramalan, yang semakin melebar ke masa depan menandakan tingkat ketidakpastian yang meningkat seiring bertambahnya horizon peramalan.
+
+
+### Akurasi Data Latih dan Data Uji SES
+
+```{r}
+# Membuat data.gab3 terlebih dahulu
+ramalan_train <- c(NA, HWopt$fitted[, 1]) # Tambah NA untuk periode ke-1
+ramalan_test  <- as.numeric(ramalanopt$mean)
+
+data.gab3 <- data.frame(
+  Data = c(train.ts, test.ts),
+  SES  = c(ramalan_train, ramalan_test)
+)
+
+# --- Akurasi Data Latih ---
+error_train.ses <- train.ts - data.gab3[1:80, 2]
+SSE_train.ses   <- sum(error_train.ses^2, na.rm = TRUE)
+MSE_train.ses   <- mean(error_train.ses^2, na.rm = TRUE)
+MAPE_train.ses  <- mean(abs(error_train.ses / train.ts * 100), na.rm = TRUE)
+
+# --- Akurasi Data Uji ---
+error_test.ses  <- test.ts - data.gab3[81:100, 2]
+SSE_test.ses    <- sum(error_test.ses^2, na.rm = TRUE)
+MSE_test.ses    <- mean(error_test.ses^2, na.rm = TRUE)
+MAPE_test.ses   <- mean(abs(error_test.ses / test.ts * 100), na.rm = TRUE)
+
+# --- Penggabungan Matriks ---
+akurasi_ses <- cbind(
+  "Training SES" = c(SSE_train.ses, MSE_train.ses, MAPE_train.ses),
+  "Testing SES"  = c(SSE_test.ses, MSE_test.ses, MAPE_test.ses)
+)
+row.names(akurasi_ses) <- c("SSE", "MSE", "MAPE")
+akurasi_ses
+```
+
+Berdasarkan tabel evaluasi akurasi metode **Single Exponential Smoothing (SES Optimum)**, diperoleh beberapa poin pembahasan terkait kinerja model pada data latih (*training*) dan data uji (*testing*):
+
+1. **Evaluasi Data Latih (*In-Sample Accuracy*):**
+> * **MSE Data Latih:** $0{,}3886$
+> * **MAPE Data Latih:** $11{,}1846\%$
+> * Pada data latih, metode SES memberikan kinerja pemulusan yang sangat presisi dengan persentase kesalahan hanya sebesar $11{,}18\%$. Nilai error yang jauh lebih kecil dibandingkan SMA ($25{,}13\%$) dan DMA ($19{,}80\%$) ini menunjukkan bahwa pembobotan eksponensial dengan parameter $\alpha$ optimum mampu merespons fluktuasi historis data suhu secara efektif.
+
+2. **Evaluasi Data Uji (*Out-of-Sample Accuracy*):**
+> * **MSE Data Uji:** $0{,}2296$
+> * **MAPE Data Uji:** $29{,}3530\%$
+> * Pada data uji (20 periode terakhir), nilai MSE tergolong rendah ($0{,}2296$). Nilai MAPE data uji yang sebesar $29{,}35\%$ mengindikasikan kemampuan peramalan yang masih dapat diterima (*reasonable forecast*), meskipun nilainya naik dibanding data latih karena proyeksi ramalan SES berbentuk konstan datar sementara data uji aktual memiliki sedikit dinamika penurunan.
+
+3. **Kesimpulan Kinerja SES:**
+> * Metode SES Optimum menunjukkan performa pemulusan data latih yang sangat kuat dan hasil peramalan data uji yang tergolong stabil tanpa risiko lonjakan error ekstrem seperti pada metode DMA.
+
+
+## Double Exponential Smoothing (DES)
+
+```{r}
+# Menggunakan parameter gamma = FALSE (tanpa musiman) dan beta = NULL (dihitung optimum)
+HW2opt <- HoltWinters(train.ts, gamma = FALSE, beta = NULL, alpha = NULL)
+ramalan2opt <- forecast(HW2opt, h = 20)
+
+# Grafik Pemulusan dan Peramalan DES
+plot(HW2opt)
+plot(ramalan2opt)
+```
+
+Berdasarkan grafik **Holt-Winters filtering** dan **Forecasts from HoltWinters** untuk metode **Double Exponential Smoothing (DES)** di atas, diperoleh beberapa poin interpretasi:
+
+1. **Pemasangan Model pada Data Latih (*Holt-Winters Filtering*):**
+> * Garis merah (*fitted values*) menunjukkan nilai pemulusan ganda pada data latih (periode jam ke-1 hingga ke-80).
+> * Garis *fitted* mampu menyesuaikan diri dengan sangat presisi terhadap pola pergerakan data aktual (garis hitam). Penambahan komponen tren ($\beta$) membuat model DES lebih responsif dalam mengikuti pola kenaikan maupun penurunan tajam dibandingkan metode pemulusan tunggal.
+
+2. **Hasil Peramalan Data Uji (*Forecasts from HoltWinters*):**
+> * Garis biru yang miring ke atas (*sloping line*) menunjukkan hasil peramalan DES untuk 20 periode ke depan (jam ke-81 hingga ke-100).
+> * Berbeda dengan SES yang menghasilkan garis lurus mendatar, peramalan metode DES membentuk **garis linier dengan kemiringan positif (tren naik)**. Hal ini terjadi karena estimasi parameter tren ($\beta$) pada akhir periode latih bernilai positif.
+> * Area berbayang abu-abu tua dan abu-abu muda menggambarkan selang kepercayaan (*confidence interval*) $80\%$ dan $95\%$ dari hasil ramalan, yang semakin melebar seiring bertambahnya horizon waktu peramalan.
+
+
+### Akurasi Data Latih dan Data Uji DES
+
+```{r}
+# --- 1. Akurasi Data Latih (Training Data) DES ---
+fitted_train.des <- as.numeric(HW2opt$fitted[, 1])
+train_actual     <- as.numeric(train.ts[-(1:2)])
+error_train.des  <- train_actual - fitted_train.des
+
+SSE_train.des  <- sum(error_train.des^2, na.rm = TRUE)
+MSE_train.des  <- mean(error_train.des^2, na.rm = TRUE)
+MAPE_train.des <- mean(abs(error_train.des / train_actual * 100), na.rm = TRUE)
+
+# --- 2. Akurasi Data Uji (Testing Data) DES ---
+test_actual     <- as.numeric(test.ts)
+forecast_test   <- as.numeric(ramalan2opt$mean)
+error_test.des  <- test_actual - forecast_test
+
+SSE_test.des   <- sum(error_test.des^2, na.rm = TRUE)
+MSE_test.des   <- mean(error_test.des^2, na.rm = TRUE)
+MAPE_test.des  <- mean(abs(error_test.des / test_actual * 100), na.rm = TRUE)
+
+# --- 3. Penggabungan Matriks Akurasi DES ---
+akurasi_des <- cbind(
+  "Training DES" = c(SSE_train.des, MSE_train.des, MAPE_train.des),
+  "Testing DES"  = c(SSE_test.des, MSE_test.des, MAPE_test.des)
+)
+row.names(akurasi_des) <- c("SSE", "MSE", "MAPE")
+akurasi_des
+```
+
+Berdasarkan tabel evaluasi akurasi metode **Double Exponential Smoothing (DES Optimum)**, diperoleh beberapa poin pembahasan terkait kinerja model pada data latih (*training*) dan data uji (*testing*):
+
+1. **Evaluasi Data Latih (*In-Sample Accuracy*):**
+> * **MSE Data Latih:** $0{,}3860$
+> * **MAPE Data Latih:** $10{,}8878\%$
+> * Pada data latih, metode DES memberikan tingkat akurasi fitting yang paling presisi di antara metode-metode non-musiman sebelumnya, dengan nilai MAPE terendah yaitu $10{,}89\%$. Hal ini terjadi karena komponen tren ($\beta$) membantu model menyesuaikan kemiringan pergerakan suhu historis secara optimal.
+
+2. **Evaluasi Data Uji (*Out-of-Sample Accuracy*):**
+> * **MSE Data Uji:** $1{,}3422$
+> * **MAPE Data Uji:** $71{,}7867\%$
+> * Pada data uji (20 periode terakhir), nilai MSE naik menjadi $1{,}3422$ dan MAPE meningkat cukup tajam menjadi $71{,}79\%$. Kenaikan error ini disebabkan oleh proyeksi garis peramalan DES yang terus menanjak naik (tren positif), sedangkan data suhu aktual pada periode uji justru cenderung melandai dan sedikit menurun.
+
+3. **Kesimpulan Kinerja DES:**
+> * Metode DES sangat unggul dalam memodelkan data historis (*in-sample*), namun untuk peramalan data uji (*out-of-sample*), kenaikan nilai MAPE menunjukkan adanya efek *over-trending* (memproyeksikan tren naik secara terus-menerus padahal data uji sudah stabil).
+
+
+# Seasonal Smoothing
+
+```{r}
+# 1. Buat objek ts khusus musiman agar tidak merusak train.ts utama
+train.ts_winter <- ts(as.numeric(train.ts), frequency = 12)
+
+# ------------------------------------------
+## Winter Aditif
+# ------------------------------------------
+
+# Fitting & Forecasting Winter Aditif
+winter1.opt   <- HoltWinters(train.ts_winter, seasonal = "additive")
+forecast1.opt <- forecast(winter1.opt, h = 20)
+
+# Plot
+plot(winter1.opt, main = "Holt-Winters Filtering (Aditif)")
+plot(forecast1.opt, main = "Forecasts from HoltWinters (Aditif)")
+
+# --- Akurasi Data Latih (Training) Winter Aditif ---
+fitted_train.winter <- as.numeric(winter1.opt$fitted[, 1])
+train_actual_winter <- as.numeric(train.ts_winter[-(1:12)])
+
+e_winter_train    <- train_actual_winter - fitted_train.winter
+SSE_train.winter  <- sum(e_winter_train^2, na.rm = TRUE)
+MSE_train.winter  <- mean(e_winter_train^2, na.rm = TRUE)
+MAPE_train.winter <- mean(abs(e_winter_train / train_actual_winter) * 100, na.rm = TRUE)
+
+# --- Akurasi Data Uji (Testing) Winter Aditif ---
+test_actual_winter   <- as.numeric(test.ts)
+forecast_test_winter <- as.numeric(forecast1.opt$mean)
+
+e_winter_test    <- test_actual_winter - forecast_test_winter
+SSE_test.winter  <- sum(e_winter_test^2, na.rm = TRUE)
+MSE_test.winter  <- mean(e_winter_test^2, na.rm = TRUE)
+MAPE_test.winter <- mean(abs(e_winter_test / test_actual_winter) * 100, na.rm = TRUE)
+
+# Matriks Akurasi Winter Aditif
+akurasi_winter <- cbind(
+  "Training Winter" = c(SSE_train.winter, MSE_train.winter, MAPE_train.winter),
+  "Testing Winter"  = c(SSE_test.winter, MSE_test.winter, MAPE_test.winter)
+)
+row.names(akurasi_winter) <- c("SSE", "MSE", "MAPE")
+akurasi_winter
+
+
+# ------------------------------------------
+## Winter Multiplikatif
+# ------------------------------------------
+
+# Fitting & Forecasting Winter Multiplikatif
+winter2.opt   <- HoltWinters(train.ts_winter, seasonal = "multiplicative")
+forecast2.opt <- forecast(winter2.opt, h = 20)
+
+# Plot
+plot(winter2.opt, main = "Holt-Winters Filtering (Multiplikatif)")
+plot(forecast2.opt, main = "Forecasts from HoltWinters (Multiplikatif)")
+
+# --- Akurasi Data Latih (Training) Winter Multiplikatif ---
+fitted_train.wmult <- as.numeric(winter2.opt$fitted[, 1])
+train_actual_wmult <- as.numeric(train.ts_winter[-(1:12)])
+
+e_wmult_train    <- train_actual_wmult - fitted_train.wmult
+SSE_train.wmult  <- sum(e_wmult_train^2, na.rm = TRUE)
+MSE_train.wmult  <- mean(e_wmult_train^2, na.rm = TRUE)
+MAPE_train.wmult <- mean(abs(e_wmult_train / train_actual_wmult) * 100, na.rm = TRUE)
+
+# --- Akurasi Data Uji (Testing) Winter Multiplikatif ---
+test_actual_wmult   <- as.numeric(test.ts)
+forecast_test_wmult <- as.numeric(forecast2.opt$mean)
+
+e_wmult_test    <- test_actual_wmult - forecast_test_wmult
+SSE_test.wmult  <- sum(e_wmult_test^2, na.rm = TRUE)
+MSE_test.wmult  <- mean(e_wmult_test^2, na.rm = TRUE)
+MAPE_test.wmult <- mean(abs(e_wmult_test / test_actual_wmult) * 100, na.rm = TRUE)
+
+# Matriks Akurasi Winter Multiplikatif
+akurasi_wmult <- cbind(
+  "Training Winter Mult" = c(SSE_train.wmult, MSE_train.wmult, MAPE_train.wmult),
+  "Testing Winter Mult"  = c(SSE_test.wmult, MSE_test.wmult, MAPE_test.wmult)
+)
+row.names(akurasi_wmult) <- c("SSE", "MSE", "MAPE")
+akurasi_wmult
+```
+
+**Interpretasi Hasil Pemodelan Holt-Winters (Aditif dan Multiplikatif)**
+
+### 1. Evaluasi Kinerja Pemodelan
+
+* **Akurasi Data Latih (Training):** Kedua metode menunjukkan kemampuan pemodelan (*fitting*) yang sangat baik pada data latih dengan tingkat kesalahan yang rendah. Metode Holt-Winters Multiplikatif menghasilkan tingkat kesalahan yang sedikit lebih rendah ($\text{MSE} = 0{,}5289$; $\text{MAPE} = 12{,}99\%$) dibandingkan Holt-Winters Aditif ($\text{MSE} = 0{,}6153$; $\text{MAPE} = 14{,}92\%$).
+* **Akurasi Data Uji (Testing):** Ketika diuji pada data baru, terjadi peningkatan nilai kesalahan yang signifikan pada kedua metode. Metode Holt-Winters Multiplikatif menghasilkan performa peramalan yang jauh lebih baik daripada Aditif, ditunjukkan oleh nilai SSE ($98{,}10$ vs $194{,}25$), MSE ($4{,}90$ vs $9{,}71$), dan MAPE ($139{,}46\%$ vs $210{,}29\%$).
+
+
+### 2. Diagnosis *Overfitting* dan Nilai MAPE Tinggi
+
+* **Lonjakan Nilai Error:** Terjadi kenaikan kesalahan (*error*) yang tajam dari *training* ke *testing* pada kedua metode. Hal ini mengindikasikan adanya kecenderungan *overfitting*, di mana pola musiman yang dipelajari dari data latih kurang mampu beradaptasi dengan tren/pola pada data uji.
+* **Tingginya Nilai MAPE:** Nilai MAPE pada data uji tergolong sangat besar ($>100\%$). Kondisi ini dipicu oleh sifat matematis MAPE yang sangat sensitif terhadap nilai aktual yang mendekati angka nol (sebagaimana terlihat pada plot peramalan di mana skala data berada di sekitar angka $0$). Deviasi kecil pada data bernilai mendekati nol secara otomatis menghasilkan persentase kesalahan rasio yang melonjak drastis.
+
+
+### 3. Kesimpulan Pemilihan Metode
+
+Secara keseluruhan, **Holt-Winters Multiplikatif** merupakan metode yang lebih superior dibandingkan Holt-Winters Aditif pada dataset ini karena secara konsisten menghasilkan nilai kesalahan (SSE, MSE, dan MAPE) yang lebih rendah, baik pada tahapan *training* maupun *testing*.
+
+
+# Perbandingan Hasil Peramalan Seluruh Metode pada Data Uji
+
+```{r}
+# Ambil nilai ramalan data uji seluruh metode
+ramalan_sma_test <- data.gab[81:100, 3]
+ramalan_dma_test <- data.gab2[81:100, 6]
+ramalan_ses_test <- as.numeric(ramalanopt$mean)
+ramalan_des_test <- as.numeric(ramalan2opt$mean)
+ramalan_win_add  <- as.numeric(forecast1.opt$mean)
+ramalan_win_mult <- as.numeric(forecast2.opt$mean)
+
+# Sumbu x (periode data uji)
+periode_test <- 80:99
+
+# Plot dasar untuk Data Uji Aktual
+plot(
+  periode_test, as.numeric(test.ts), type = "l", col = "black", lwd = 2,
+  ylim = c(-2, 4), # Rentang sumbu Y diperbesar agar semua garis muat
+  xlab = "Periode Data Uji (Jam)",
+  ylab = "Suhu (degC)",
+  main = "Perbandingan Hasil Peramalan Seluruh Metode pada Data Uji"
+)
+
+# Menambahkan garis ramalan tiap metode
+lines(periode_test, ramalan_sma_test, col = "orange", lty = 2, lwd = 2)
+lines(periode_test, ramalan_dma_test, col = "purple", lty = 2, lwd = 2)
+lines(periode_test, ramalan_ses_test, col = "blue", lty = 1, lwd = 2)
+lines(periode_test, ramalan_des_test, col = "red", lty = 1, lwd = 2)
+lines(periode_test, ramalan_win_add, col = "darkgreen", lty = 3, lwd = 2)
+lines(periode_test, ramalan_win_mult, col = "brown", lty = 3, lwd = 2)
+
+# Menambahkan Legenda Lengkap
+legend(
+  "topleft",
+  legend = c("Data Uji Aktual", "SMA (n=4)", "DMA (n=4)", "SES Optimum", "DES Optimum", "Winter Aditif", "Winter Mult"),
+  col    = c("black", "orange", "purple", "blue", "red", "darkgreen", "brown"),
+  lty    = c(1, 2, 2, 1, 1, 3, 3),
+  lwd    = 2,
+  cex    = 0.7, # Ukuran teks legenda diperkecil sedikit agar rapi
+  bg     = "white"
+)
+```
+
+**Interpretasi Grafik Perbandingan Peramalan pada Data Uji**
+
+* **Pola Data Uji Aktual (Garis Hitam):**
+Data aktual menunjukkan pergerakan yang cenderung stabil di sekitar nilai $-1$ hingga $-1{,}5$ degC tanpa adanya tren naik yang signifikan pada periode jam ke-80 hingga 99.
+* **Evaluasi Performa Metode Berkomponen Tren & Musiman (DMA, DES, Winter Aditif, Winter Multiplikatif):**
+* **DMA, DES, dan Winter (Multiplikatif & Aditif)** menghasilkan pola peramalan yang terus meningkat (*trending upward*) hingga mencapai rentang nilai $0$ sampai $3{,}5$ degC.
+* Kenaikan tren pada metode-metode ini dipicu oleh adanya proyeksi komponen tren dari data latih (*training*), sehingga garis ramalan makin jauh menyimpang (*overforecast*) dari data uji aktual yang bernilai negatif.
+
+
+* **Evaluasi Performa Metode Pemulusan Sederhana (SMA & SES):**
+* **SMA (n=4)** dan **SES Optimum** menghasilkan garis ramalan berbentuk horizontal/konstan.
+* Hasil peramalan **SES Optimum** (garis biru) dan **SMA** (garis oranye) berada sangat dekat dengan pola data uji aktual yang relatif konstan pada kisaran $-0{,}9$ hingga $-1{,}3$ degC.
+
+
+* **Kesimpulan Pemilihan Metode Terbaik:**
+Berdasarkan grafik, metode **SES Optimum** dan **SMA (n=4)** merupakan metode yang paling presisi dan akurat untuk meramalkan data uji karena garis ramalannya paling mendekati fluktuasi data aktual. Sebaliknya, metode tren dan musiman (DMA, DES, Holt-Winters) tidak cocok digunakan pada periode ini karena menghasilkan galat (*error*) yang sangat besar akibat proyeksi tren naik yang tidak terjadi pada data aktual.
+
+
+# Rekapitulasi Akurasi Seluruh Metode
+
+```{r}
+# 1. Akurasi SMA (n=4)
+e_sma_train    <- as.numeric(train.ts) - data.gab[1:80, 3]
+SSE_train.sma  <- sum(e_sma_train^2, na.rm = TRUE)
+MSE_train.sma  <- mean(e_sma_train^2, na.rm = TRUE)
+RMSE_train.sma <- sqrt(MSE_train.sma)
+MAPE_train.sma <- mean(abs(e_sma_train / as.numeric(train.ts)) * 100, na.rm = TRUE)
+
+e_sma_test    <- as.numeric(test.ts) - data.gab[81:100, 3]
+SSE_test.sma  <- sum(e_sma_test^2, na.rm = TRUE)
+MSE_test.sma  <- mean(e_sma_test^2, na.rm = TRUE)
+RMSE_test.sma <- sqrt(MSE_test.sma)
+MAPE_test.sma <- mean(abs(e_sma_test / as.numeric(test.ts)) * 100, na.rm = TRUE)
+
+# 2. Akurasi DMA (n=4)
+e_dma_train    <- as.numeric(train.ts) - data.gab2[1:80, 6]
+SSE_train.dma  <- sum(e_dma_train^2, na.rm = TRUE)
+MSE_train.dma  <- mean(e_dma_train^2, na.rm = TRUE)
+RMSE_train.dma <- sqrt(MSE_train.dma)
+MAPE_train.dma <- mean(abs(e_dma_train / as.numeric(train.ts)) * 100, na.rm = TRUE)
+
+e_dma_test    <- as.numeric(test.ts) - data.gab2[81:100, 6]
+SSE_test.dma  <- sum(e_dma_test^2, na.rm = TRUE)
+MSE_test.dma  <- mean(e_dma_test^2, na.rm = TRUE)
+RMSE_test.dma <- sqrt(MSE_test.dma)
+MAPE_test.dma <- mean(abs(e_dma_test / as.numeric(test.ts)) * 100, na.rm = TRUE)
+
+# 3. Akurasi SES Optimum
+fitted_ses_train <- as.numeric(HWopt$fitted[, 1])
+e_ses_train      <- as.numeric(train.ts[-1]) - fitted_ses_train
+SSE_train.ses    <- sum(e_ses_train^2, na.rm = TRUE)
+MSE_train.ses    <- mean(e_ses_train^2, na.rm = TRUE)
+RMSE_train.ses   <- sqrt(MSE_train.ses)
+MAPE_train.ses   <- mean(abs(e_ses_train / as.numeric(train.ts[-1])) * 100, na.rm = TRUE)
+
+e_ses_test    <- as.numeric(test.ts) - as.numeric(ramalanopt$mean)
+SSE_test.ses  <- sum(e_ses_test^2, na.rm = TRUE)
+MSE_test.ses  <- mean(e_ses_test^2, na.rm = TRUE)
+RMSE_test.ses <- sqrt(MSE_test.ses)
+MAPE_test.ses <- mean(abs(e_ses_test / as.numeric(test.ts)) * 100, na.rm = TRUE)
+
+# 4. Akurasi DES Optimum
+fitted_des_train <- as.numeric(HW2opt$fitted[, 1])
+e_des_train      <- as.numeric(train.ts[-(1:2)]) - fitted_des_train
+SSE_train.des    <- sum(e_des_train^2, na.rm = TRUE)
+MSE_train.des    <- mean(e_des_train^2, na.rm = TRUE)
+RMSE_train.des   <- sqrt(MSE_train.des)
+MAPE_train.des   <- mean(abs(e_des_train / as.numeric(train.ts[-(1:2)])) * 100, na.rm = TRUE)
+
+e_des_test    <- as.numeric(test.ts) - as.numeric(ramalan2opt$mean)
+SSE_test.des  <- sum(e_des_test^2, na.rm = TRUE)
+MSE_test.des  <- mean(e_des_test^2, na.rm = TRUE)
+RMSE_test.des <- sqrt(MSE_test.des)
+MAPE_test.des <- mean(abs(e_des_test / as.numeric(test.ts)) * 100, na.rm = TRUE)
+
+# 5. Hitung RMSE untuk Winter
+RMSE_train.winter <- sqrt(MSE_train.winter)
+RMSE_test.winter  <- sqrt(MSE_test.winter)
+
+RMSE_train.wmult <- sqrt(MSE_train.wmult)
+RMSE_test.wmult  <- sqrt(MSE_test.wmult)
+
+# 6. Penggabungan ke Dalam Data Frame
+tabel_perbandingan <- data.frame(
+  Metode = c("SMA (n=4)", "DMA (n=4)", "SES Optimum", "DES Optimum", "Winter Aditif", "Winter Multiplikatif"),
+  
+  SSE_Train  = c(SSE_train.sma, SSE_train.dma, SSE_train.ses, SSE_train.des, SSE_train.winter, SSE_train.wmult),
+  MSE_Train  = c(MSE_train.sma, MSE_train.dma, MSE_train.ses, MSE_train.des, MSE_train.winter, MSE_train.wmult),
+  RMSE_Train = c(RMSE_train.sma, RMSE_train.dma, RMSE_train.ses, RMSE_train.des, RMSE_train.winter, RMSE_train.wmult),
+  MAPE_Train = c(MAPE_train.sma, MAPE_train.dma, MAPE_train.ses, MAPE_train.des, MAPE_train.winter, MAPE_train.wmult),
+  
+  SSE_Test   = c(SSE_test.sma, SSE_test.dma, SSE_test.ses, SSE_test.des, SSE_test.winter, SSE_test.wmult),
+  MSE_Test   = c(MSE_test.sma, MSE_test.dma, MSE_test.ses, MSE_test.des, MSE_test.winter, MSE_test.wmult),
+  RMSE_Test  = c(RMSE_test.sma, RMSE_test.dma, RMSE_test.ses, RMSE_test.des, RMSE_test.winter, RMSE_test.wmult),
+  MAPE_Test  = c(MAPE_test.sma, MAPE_test.dma, MAPE_test.ses, MAPE_test.des, MAPE_test.winter, MAPE_test.wmult)
+)
+
+tabel_perbandingan
+```
+
+
+Metode **Single Moving Average (SMA n=4)** merupakan model peramalan terbaik untuk dataset ini berdasarkan seluruh indikator evaluasi pada data uji (*testing*).
+
+
+### Interpretasi Hasil & Analisis
+
+* **Performa Terbaik pada Data Uji (Testing):**
+* Metode **SMA (n=4)** menghasilkan galat terendah di seluruh metrik uji: **SSE Test (1.6211)**, **MSE Test (0.0811)**, **RMSE Test (0.2847 degC)**, dan **MAPE Test (22.38%)**.
+* Nilai **RMSE Test sebesar 0.2847 degC** menunjukkan bahwa rata-rata deviasi hasil ramalan metode SMA hanya berselisih sekitar **$\pm 0{,}28\text{ degC}$** dari nilai aktualnya.
+
+
+* **Fenomena Overfitting pada Model Tren & Musiman:**
+* Model yang menyertakan komponen tren/musiman (seperti DES, DMA, dan Holt-Winters) tampil sangat presisi pada data latih (MAPE Train < 15%), namun mengalami **lonjakan galat drastis pada data uji** (MAPE Test mencapai 71% hingga 210%).
+* Hal ini menandakan terjadinya *overfitting*, di mana tren naik dari data latih tidak berlanjut pada periode data uji.
+
+
+* **Perbandingan SMA vs SES:**
+* **SES Optimum** merupakan pesaing terdekat dengan performa yang cukup baik pada data uji (RMSE Test 0.4792 degC).
+* Namun, **SMA (n=4)** tetap secara konsisten mengungguli SES di semua indikator data uji.
+
+
+Berdasarkan evaluasi kebaikan model pada *data testing*, metode **Single Moving Average (SMA n=4)** terpilih sebagai metode peramalan terbaik. Metode ini menghasilkan galat terkecil secara keseluruhan dengan nilai **SSE sebesar 1.6211**, **MSE sebesar 0.0811**, **RMSE sebesar 0.2847 degC**, dan **MAPE sebesar 22.38%**. Model-model kompleks yang memperhitungkan tren dan musiman (seperti DES, DMA, dan Holt-Winters) terindikasi mengalami *overfitting* karena menghasilkan galat yang jauh lebih besar pada periode uji.
+
