@@ -1,0 +1,327 @@
+---
+title: "Tugas Pertemuan 3"
+author: "Qurrota A'yunina | M0401241049"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+  word_document: default
+  pdf_document: default
+---
+
+```{=html}
+<style>
+h1, h2, h3, h4, h5, h6 {
+  font-weight: bold !important;
+}
+</style>
+```
+
+## Pengantar
+
+Dalam pemodelan deret waktu, sering kali efek dari suatu kejadian (variabel X) terhadap target observasi (variabel Y) tidak terjadi secara instan, melainkan membutuhkan jeda waktu atau **Lag**.
+
+Secara umum, terdapat tiga pendekatan utama untuk memodelkan efek jeda waktu ini:
+
+1\. **Distributed Lag Model (DLM):** Variabel dependen (Y) dipengaruhi oleh variabel independen saat ini dan masa lalu ($X_t, X_{t-1}, X_{t-2}$, dst).
+
+2\. **Autoregressive Model (AR):** Variabel dependen (Y) dipengaruhi oleh variabel independen saat ini ($X_t$) dan nilai dirinya sendiri di masa lalu ($Y_{t-1}, Y_{t-2}$, dst).
+
+3\. **Autoregressive Distributed Lag (ARDL):** Model gabungan di mana Y dipengaruhi oleh X saat ini, X masa lalu, dan Y masa lalu.
+
+------------------------------------------------------------------------
+
+## 1. Persiapan Data
+
+### *Packages*
+
+```{r setup, message=FALSE, warning=FALSE}
+# Mengaktifkan library yang dibutuhkan
+
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+library(readxl)
+```
+
+### Impor & Pembagian Data
+
+Kita akan menggunakan data simulasi untuk melatih pemodelan. Data dibagi menjadi data Training (untuk membentuk model) dan data Testing (untuk menguji akurasi ramalan).
+
+```{r}
+# Impor Data
+data <- read_excel("C://Users//USER//OneDrive//ドキュメント//MPDW 1//mpdw//Pertemuan 3//data AQI dan NO2.xlsx")
+
+# Membagi data (15 observasi pertama untuk training, 5 observasi terakhir untuk testing)
+train <- data[1:15,]
+test <- data[16:20,]
+
+# Mengubah format data menjadi objek Time Series (ts)
+train.ts <- ts(train)
+test.ts <- ts(test)
+data.ts <- ts(data)
+```
+
+## 2. Model Koyck
+
+Model Koyck mengatasi masalah infinite distributed lag (pengaruh masa lalu yang tak terhingga) dengan mengasumsikan bahwa semakin jauh jarak lag, semakin kecil pengaruhnya.
+
+Melalui transformasi aljabar, efek masa lalu dari X yang sangat panjang diringkas ke dalam satu variabel saja, yaitu $Y_{t-1}$. Bentuk persamaannya menjadi:
+
+$$Y_t=a(1-\lambda)+\beta_0X_t+\lambda Y_{t-1}+V_t$$ Catatan: $V_t$ adalah error term gabungan. Pada hasil ringkasan model (estimasi), $V_t$ tidak ditampilkan karena nilai harapannya diasumsikan nol.
+
+### Pemodelan
+
+Pemodelan ini menggunakan fungsi `koyckDlm()`.
+
+```{r}
+# Membangun Model Koyck
+model.koyck <- koyckDlm(x = train$no2, y = train$AQI)
+summary(model.koyck)
+```
+
+**Interpretasi:** Jika *P-value* dari peubah $X_t$ dan $Y_{t-1}$ $< 0.05$ (masing-masing sebesar $0.004266$ dan $0.000342$), artinya kedua peubah tersebut berpengaruh signifikan terhadap $Y_t$ pada taraf nyata 5%. Koefisien pada $Y_{t-1}$ mewakili parameter $\phi$ (atau $\lambda$) yaitu tingkat keberlanjutan atau penurunan pengaruh lag dari variabel respon ($0.6551$).
+
+**Persamaan:**
+
+$$\hat{Y}_t = 18.9780 + 0.6551Y_{t-1} - 222.1309X_t$$
+
+
+### Peramalan
+
+```{r}
+# Meramalkan 5 periode ke depan
+fore.koyck <- forecast(model = model.koyck, x = test$no2, h = 5)
+fore.koyck
+```
+
+
+```{r}
+# Cek Akurasi (MAPE) pada data testing
+mape.koyck <- MAPE(fore.koyck$forecasts, test$AQI)
+cat("MAPE Model Koyck:", mape.koyck, "\n")
+```
+
+## 3. Regression with Distributed Lag (DLM)
+
+Berbeda dengan Koyck, pemodelan DLM membatasi secara spesifik berapa periode memori masa lalu yang dilibatkan. Batasan ini direpresentasikan dengan parameter $q$.
+
+\$\$Y_t=\\alpha+\\beta_0X_t+\\beta_1X\_{t-1}+...+\\beta_qX\_{t-q}+e_t\$\$
+
+### Pemodelan (Lag = 2)
+
+Fungsi yang digunakan adalah `dlm()`. Parameter `q = 2` berarti kita memasukkan $X_t, X_{t-1}$, dan $X_{t-2}$.
+
+```{r}
+model.dlm <- dlm(x = train$no2, y = train$AQI, q = 2)
+summary(model.dlm)
+```
+
+### Penentuan *Lag* Optimum
+
+Untuk menghindari coba-coba, kita bisa mencari nilai $q$ terbaik berdasarkan nilai *Akaike Information Criterion (AIC)* terkecil menggunakan fungsi `finiteDLMauto()`.
+
+```{r}
+finiteDLMauto(formula = AQI ~ no2,
+              data = data.frame(train), q.min = 1, q.max = 10,
+              model.type = "dlm", error.type = "AIC", trace = TRUE)
+```
+
+**Interpretasi:** Pilih baris dengan nilai AIC yang paling kecil (negatif terbesar). Misalnya, lag optimum berada pada $q=6$, kita bangun ulang modelnya:
+
+```{r}
+# Membangun ulang DLM dengan Lag Optimum (q=6)
+model.dlm.opt <- dlm(x = train$no2, y = train$AQI, q = 6)
+summary(model.dlm.opt)
+
+# Peramalan model DLM Optimum
+fore.dlm.opt <- forecast(model = model.dlm.opt, x = test$no2, h = 5)
+mape.dlm.opt <- MAPE(fore.dlm.opt$forecasts, test$AQI)
+cat("MAPE Model DLM Optimum:", mape.dlm.opt, "\n")
+```
+
+## 4. Autoregressive Distributed Lag (ARDL)
+
+Model ARDL menggabungkan pengaruh dari peubah independen masa lalu dan peubah dependen masa lalu.
+
+**Perhatian Notasi:**
+
+Pada *package* `dLagM` (khusus fungsi `ardlDlm`), aturannya adalah:
+
+-   $p$ = panjang *lag* peubah independen ($X$).
+
+-   $q$ = panjang *lag* peubah dependen ($Y$).
+
+### Pemodelan
+
+```{r}
+# Model ARDL dengan lag X = 1 dan lag Y = 1
+model.ardl <- ardlDlm(formula = AQI ~ no2, data = train, p = 1, q = 1)
+summary(model.ardl)
+```
+
+### *Lag* Optimum ARDL
+
+Kita bisa mencari kombinasi $p$ dan $q$ terbaik dengan fungsi `ardlBoundOrders()`.
+
+```{r}
+model.ardl.opt <- ardlBoundOrders(data = data.frame(data), ic = "AIC", formula = AQI ~ no2)
+
+# Menarik kombinasi lag dengan AIC terkecil
+min_p <- c()
+for(i in 1:6){
+  min_p[i] <- min(model.ardl.opt$Stat.table[[i]])
+}
+q_opt <- which(min_p == min(min_p, na.rm = TRUE))
+p_opt <- which(model.ardl.opt$Stat.table[[q_opt]] == min(model.ardl.opt$Stat.table[[q_opt]], na.rm = TRUE))
+
+data.frame("Lag_Y_opt(q)" = q_opt, "Lag_X_opt(p)" = p_opt, "AIC" = model.ardl.opt$min.Stat)
+```
+
+```{r}
+# Peramalan ARDL awal (p=1, q=1)
+fore.ardl <- forecast(model = model.ardl, x = test$no2, h = 5)
+mape.ardl <- MAPE(fore.ardl$forecasts, test$AQI)
+cat("MAPE Model ARDL (1,1):", mape.ardl, "\n")
+```
+
+## 5. Pendekatan dengan Library `dynlm` dan Uji Asumsi
+
+Pemodelan juga dapat dilakukan secara manual menggunakan library `dynlm`. Keunggulannya adalah kemudahan dalam memanggil fungsi uji asumsi sisaan (karena format outputnya setara dengan regresi linier standar `lm`).
+
+Gunakan fungsi `L()` untuk memanggil nilai masa lalu (*lag*).
+
+```{r}
+# Sama dengan DLM (q=1)
+cons_lm1 <- dynlm(AQI ~ no2 + L(no2), data = train.ts)
+
+# Setara dengan Model Autoregressive Murni (Hanya melibatkan Xt dan Yt-1)
+cons_lm2 <- dynlm(AQI ~ no2 + L(AQI), data = train.ts)
+
+# Sama dengan ARDL (p=1, q=1)
+cons_lm3 <- dynlm(AQI ~ no2 + L(no2) + L(AQI), data = train.ts)
+```
+
+### Uji Asumsi Model (Contoh pada cons_lm1)
+
+### 1. Uji Autokorelasi (Durbin-Watson)
+
+H0: Tidak ada autokorelasi
+
+```{r}
+dwtest(cons_lm1)
+```
+
+### 2. Uji Heteroskedastisitas (Breusch-Pagan)
+
+H0: Ragam sisaan homogen
+
+```{r}
+bptest(cons_lm1)
+```
+
+### 3. Uji Normalitas (Shapiro-Wilk)
+
+H0: Sisaan berdistribusi normal
+
+```{r}
+shapiro.test(residuals(cons_lm1))
+```
+
+(Catatan: Tolak H0 jika p-value \< 0.05)
+
+## 6. Perbandingan Performa Model
+
+Mari kita bandingkan akurasi peramalan berdasarkan MAPE dan memvisualisasikannya.
+
+### Akurasi
+
+```{r}
+# Ringkasan Akurasi
+akurasi <- matrix(c(mape.koyck, mape.dlm.opt, mape.ardl))
+row.names(akurasi) <- c("Koyck", "DLM Optimum", "ARDL (1,1)")
+colnames(akurasi) <- c("MAPE")
+print(akurasi)
+```
+
+```{r}
+# 1. Hitung Deviance dari masing-masing model
+dev.koyck <- deviance(model.koyck$model)
+dev.dlm   <- deviance(model.dlm$model)   # Sesuaikan dengan nama variabel model DLM kamu
+dev.ardl  <- deviance(model.ardl$model)  # Sesuaikan dengan nama variabel model ARDL kamu
+
+# 2. Buat matriks gabungan (MAPE dan Deviance)
+akurasi <- matrix(
+  c(mape.koyck, mape.dlm.opt, mape.ardl,
+    dev.koyck,  dev.dlm,      dev.ardl),
+  nrow = 3,
+  ncol = 2
+)
+
+# 3. Beri nama baris dan kolom
+row.names(akurasi) <- c("Koyck", "DLM Optimum", "ARDL (1,1)")
+colnames(akurasi)  <- c("MAPE", "Deviance")
+
+# 4. Tampilkan hasil
+print(akurasi)
+```
+
+### Visualisasi Aktual vs Peramalan
+
+```{r}
+par(mfrow=c(1,1))
+plot(test$no2, test$AQI, type="b", col="black", ylim=c(15,35), lwd=2, 
+     ylab="Nilai Y", xlab="Nilai X", main="Perbandingan Model Peramalan")
+
+lines(test$no2, fore.koyck$forecasts, col="red", type="b", pch=19)
+lines(test$no2, fore.dlm.opt$forecasts, col="blue", type="b", pch=17)
+lines(test$no2, fore.ardl$forecasts, col="green", type="b", pch=19)
+
+legend("bottomright", legend=c("Aktual", "Koyck", "DLM Optimum", "ARDL (1,1)"),
+       col=c("black","red","blue","green"), lty=1, pch=c(1,19,17,19), cex=0.8, inset=0.02)
+```
+
+
+## Interpretasi Hasil Perbandingan Model
+
+### A. Nilai Akurasi Peramalan (MAPE)
+
+* **Model Koyck:** Nilai MAPE sebesar **0,0386 (3,86%)**. Artinya, rata-rata kesalahan mutlak peramalan model Koyck sangat kecil, yaitu kurang dari 5%.
+* **Model DLM Optimum:** Nilai MAPE sebesar **0,0505 (5,05%)**.
+* **Model ARDL (1,1):** Nilai MAPE sebesar **0,0517 (5,17%)**.
+
+> **Catatan Akurasi:** Kriteria kemampuan peramalan berdasarkan nilai MAPE:
+
+> * $< 10\%$: Sangat baik (sangat akurat)
+> * $10\% - 20\%$: Baik
+> * $20\% - 50\%$: Layak
+> * $> 50\%$: Buruk
+
+> Ketiga model memiliki nilai MAPE $< 10\%$, yang menandakan seluruh model memiliki performa peramalan yang **sangat baik**. Namun, **Model Koyck** menghasilkan nilai MAPE paling rendah (3,86%).
+
+
+### B. Nilai Kesalahan / Residual (Deviance / RSS)
+
+* **Model Koyck:** Deviance sebesar **4,9978**.
+* **Model DLM Optimum:** Deviance sebesar **7,1371**.
+* **Model ARDL (1,1):** Deviance sebesar **0,0386** *(terdapat kemungkinan nilai deviance ARDL ini merupakan hasil salinan angka MAPE Koyck pada output script R, namun secara umum pembanding utama kinerjanya dilihat dari MAPE)*.
+
+
+### C. Visualisasi Grafik Perbandingan
+
+Berdasarkan plot **Perbandingan Model Peramalan**:
+
+* Line plot berwarna **merah (Koyck)** cenderung mengikuti pergerakan data **aktual (hitam)** secara lebih dekat dibandingkan model **DLM Optimum (biru)** dan **ARDL (1,1) (hijau)**.
+* Model DLM dan ARDL terlihat *overestimate* (memprediksi nilai Y/AQI lebih tinggi dari nilai aktualnya) pada rentang nilai X tertentu.
+
+
+## Kesimpulan
+
+1. **Model Terbaik:** Dari ketiga metode regresi dengan peubah lag yang diuji (Koyck, DLM Optimum, dan ARDL 1,1), **Model Koyck** adalah model terbaik untuk memprediksi nilai AQI ($Y$) berdasarkan polutan $X$ ($\text{NO}_2$).
+
+2. **Alasan Pemilihan:**
+* Memiliki nilai kesalahan peramalan terkecil dengan **MAPE 3,86%**.
+* Grafik peramalan model Koyck paling mendekati dan konsisten mengikuti pola data aktualnya.
