@@ -1,0 +1,424 @@
+---
+title: "Tugas Pertemuan 4 Praktikum MPDW"
+author: "Qurrota A'yunina"
+date: "2026-09-12"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+  word_document: default
+  pdf_document: default
+---
+
+
+# PROSES MA(2) 
+
+```{r}
+library(TSA)
+
+set.seed(123) # Mengunci seed agar hasil acak selalu konstan/sama
+```
+
+## 1. BANGKITKAN MODEL MA(2)
+
+```{r}
+# ------------------------------------------------------------------------------
+# 1. BANGKITKAN MODEL MA(2)
+# ------------------------------------------------------------------------------
+# Parameter: theta_1 = 0.4, theta_2 = 0.6, n = 300
+# Persamaan MA(2): Y_t = e_t + theta_1 * e_{t-1} + theta_2 * e_{t-2}
+
+n <- 300
+theta1 <- 0.4
+theta2 <- 0.6
+e <- rnorm(n, mean = 0, sd = 1) # White noise ~ N(0,1)
+
+# A. Pembangkitan Manual
+y_manual <- numeric(n)
+y_manual[1] <- e[1]
+y_manual[2] <- e[2] + theta1 * e[1]
+
+for (t in 3:n) {
+  y_manual[t] <- e[t] + theta1 * e[t - 1] + theta2 * e[t - 2]
+}
+
+# B. Pembangkitan menggunakan fungsi arima.sim()
+y_sim <- arima.sim(model = list(ma = c(theta1, theta2)), n = n)
+```
+
+## 2. PLOT TIME SERIES, ACF, PACF, EACF & IDENTIFIKASI STASIONERITAS
+
+```{r}
+# ------------------------------------------------------------------------------
+# 2. PLOT TIME SERIES, ACF, PACF, EACF & IDENTIFIKASI STASIONERITAS
+# ------------------------------------------------------------------------------
+# Mengatur layout plot (2x2)
+par(mfrow = c(2, 2))
+
+# Plot Time Series
+plot.ts(y_sim, main = "Plot Time Series MA(2)", ylab = "Y_t", col = "blue")
+
+# Plot ACF (Autocorrelation Function)
+# MA(2) secara teoritis akan cut off setelah lag 2
+acf(y_sim, lag.max = 20, main = "Plot ACF MA(2)")
+
+# Plot PACF (Partial Autocorrelation Function)
+# PACF untuk MA(2) akan membuntut (tails off/dies down)
+pacf(y_sim, lag.max = 20, main = "Plot PACF MA(2)")
+
+# Kembali ke layout plot normal (1x1)
+par(mfrow = c(1, 1))
+
+# Plot EACF (Extended ACF)
+cat("\n--- Extended ACF (EACF) ---\n")
+eacf(y_sim)
+```
+
+
+## 3. SCATTERPLOT Y_t DENGAN Y_{t-1}, Y_{t-2}, DAN Y_{t-3}
+
+```{r}
+# ------------------------------------------------------------------------------
+# 3. SCATTERPLOT Y_t DENGAN Y_{t-1}, Y_{t-2}, DAN Y_{t-3}
+# ------------------------------------------------------------------------------
+# Membuat lag data
+yt   <- y_sim[4:n]
+yt_1 <- y_sim[3:(n-1)]
+yt_2 <- y_sim[2:(n-2)]
+yt_3 <- y_sim[1:(n-3)]
+
+par(mfrow = c(1, 3))
+plot(yt_1, yt, main = "Scatterplot Y_t vs Y_{t-1}", xlab = "Y_{t-1}", ylab = "Y_t", col = "darkgreen", pch = 16)
+plot(yt_2, yt, main = "Scatterplot Y_t vs Y_{t-2}", xlab = "Y_{t-2}", ylab = "Y_t", col = "darkred", pch = 16)
+plot(yt_3, yt, main = "Scatterplot Y_t vs Y_{t-3}", xlab = "Y_{t-3}", ylab = "Y_t", col = "darkblue", pch = 16)
+par(mfrow = c(1, 1))
+```
+
+
+## 4. PERHITUNGAN AUTOKORELASI (TEORITIS VS BANGKITAN)
+
+```{r}
+# ------------------------------------------------------------------------------
+# 4. PERHITUNGAN AUTOKORELASI (TEORITIS VS BANGKITAN)
+# ------------------------------------------------------------------------------
+
+# A. Nilai Autokorelasi Teoritis
+denom <- 1 + theta1^2 + theta2^2
+rho1_teoritis <- theta1 * (1 + theta2) / denom
+rho2_teoritis <- theta2 / denom
+rho3_teoritis <- 0
+
+# B. Nilai Autokorelasi Data Pembangkitan (Empiris)
+# Dibungkus as.vector() agar nilainya tidak bergeser di tabel
+# Panggil sintaks awalmu, lalu tambahkan nilai Lag 0 (1) di depannya
+acf_empiris <- c(1, acf(y_sim, plot = FALSE)$acf[1:3])
+
+tabel_hasil <- data.frame(
+  Lag = c("Lag 0", "Lag 1", "Lag 2", "Lag 3"),
+  Teoritis = c(1, rho1_teoritis, rho2_teoritis, rho3_teoritis),
+  Empiris = acf_empiris
+)
+
+cat("\n--- PERBANDINGAN AUTOKORELASI ---\n")
+print(tabel_hasil)
+```
+
+**Interpretasi**
+
+1. Identifikasi Stasioneritas & Pola Plot (ACF, PACF, EACF)
+
+* **Plot Time Series:** Data berfluktuasi secara acak di sekitar rata-rata nol (mean = 0) dengan varians yang relatif konstan. Tidak terlihat tren naik/turun maupun pola musiman. Artinya, **data sudah stasioner**.
+* **Plot ACF:** Signifikan (keluar garis batas biru) pada **lag 1 dan lag 2**, lalu *cut off* (masuk dalam batas kepercayaan) mulai lag 3. Pola *cut off* pada lag 2 menunjukkan karakteristik utama dari proses **MA(2)**.
+* **Plot PACF:** Terlihat pola meluruh secara perlahan (*tails off / dies down*), yang mengonfirmasi bahwa model bersifat Moving Average.
+* **Matriks EACF:** Membentuk sudut segitiga bernilai `o` (tidak signifikan) yang diawali pada **baris AR = 0** dan **kolom MA = 2**. Hal ini menegaskan bahwa model tentatif terbaik adalah **MA(2)**.
+
+
+2. Interpretasi Scatterplot
+
+* **$Y_t$ vs $Y_{t-1}$ & $Y_t$ vs $Y_{t-2}$:** Terbentuk pola hubungan linier positif (sebaran titik cenderung miring ke kanan atas). Ini menunjukkan adanya korelasi positif yang cukup kuat pada lag 1 dan lag 2.
+* **$Y_t$ vs $Y_{t-3}$:** Sebaran titik berbentuk lingkaran acak tanpa pola linier. Hal ini mengindikasikan **tidak ada korelasi** antara $Y_t$ dengan $Y_{t-3}$ (korelasi mendekati 0), sesuai dengan sifat MA(2) yang terputus setelah lag 2.
+
+
+3. Perbandingan Autokorelasi (Teoritis vs Empiris)
+
+Secara keseluruhan, nilai autokorelasi empiris dari data bangkitan ($n = 300$) menunjukkan pola yang sangat konsisten dengan nilai autokorelasi teoritisnya. Pada Lag 0, nilainya sempurna bernilai $1,0000$. Pada Lag 1 dan Lag 2, terdapat korelasi positif yang signifikan dengan nilai teoritis berturut-turut sebesar $0,4211$ dan $0,3947$, sedangkan nilai empiris dari data bangkitan sebesar $0,3199$ pada Lag 1 dan $0,3435$ pada Lag 2. Selanjutnya pada Lag 3, nilai autokorelasi turun drastis mendekati nol, di mana nilai teoritisnya adalah $0,0000$ dan nilai empirisnya sebesar $-0,1112$. Sedikit perbedaan angka antara teoritis dan empiris merupakan hal yang wajar akibat adanya variasi acak (sampling error) pada proses simulasi data.
+
+
+
+# PROSES AR(2)
+
+```{r}
+library(TSA)
+
+set.seed(123) # Mengunci seed agar hasil simulasi konsisten
+```
+
+## 1. BANGKITKAN MODEL AR(2)
+
+```{r}
+# ------------------------------------------------------------------------------
+# 1. BANGKITKAN MODEL AR(2)
+# ------------------------------------------------------------------------------
+# Parameter: phi_1 = 0.5, phi_2 = 0.2, n = 300
+# Persamaan AR(2): Y_t = phi_1 * Y_{t-1} + phi_2 * Y_{t-2} + e_t
+
+n <- 300
+phi1 <- 0.5
+phi2 <- 0.2
+e <- rnorm(n, mean = 0, sd = 1) # White noise ~ N(0,1)
+
+# A. Pembangkitan Manual
+y_manual <- numeric(n)
+y_manual[1] <- e[1]
+y_manual[2] <- phi1 * y_manual[1] + e[2]
+
+for (t in 3:n) {
+  y_manual[t] <- phi1 * y_manual[t - 1] + phi2 * y_manual[t - 2] + e[t]
+}
+
+# B. Pembangkitan menggunakan fungsi arima.sim()
+y_sim <- arima.sim(model = list(ar = c(phi1, phi2)), n = n)
+```
+
+
+## 2. PLOT TIME SERIES, ACF, PACF, EACF & IDENTIFIKASI STASIONERITAS
+
+```{r}
+# ------------------------------------------------------------------------------
+# 2. PLOT TIME SERIES, ACF, PACF, EACF & IDENTIFIKASI STASIONERITAS
+# ------------------------------------------------------------------------------
+# Layout plot (2x2)
+par(mfrow = c(2, 2))
+
+# Plot Time Series
+plot.ts(y_sim, main = "Plot Time Series AR(2)", ylab = "Y_t", col = "blue")
+
+# Plot ACF (Autocorrelation Function)
+# ACF untuk AR(2) akan meluruh perlahan (tails off / dies down)
+acf(y_sim, lag.max = 20, main = "Plot ACF AR(2)")
+
+# Plot PACF (Partial Autocorrelation Function)
+# PACF untuk AR(2) akan cut off setelah lag 2
+pacf(y_sim, lag.max = 20, main = "Plot PACF AR(2)")
+
+# Layout normal
+par(mfrow = c(1, 1))
+
+# Plot EACF (Extended ACF)
+cat("\n--- Extended ACF (EACF) ---\n")
+eacf(y_sim)
+```
+
+## 3. SCATTERPLOT Y_t DENGAN Y_{t-1}, Y_{t-2}, DAN Y_{t-3}
+
+```{r}
+# ------------------------------------------------------------------------------
+# 3. SCATTERPLOT Y_t DENGAN Y_{t-1}, Y_{t-2}, DAN Y_{t-3}
+# ------------------------------------------------------------------------------
+yt   <- y_sim[4:n]
+yt_1 <- y_sim[3:(n-1)]
+yt_2 <- y_sim[2:(n-2)]
+yt_3 <- y_sim[1:(n-3)]
+
+par(mfrow = c(1, 3))
+plot(yt_1, yt, main = "Scatterplot Y_t vs Y_{t-1}", xlab = "Y_{t-1}", ylab = "Y_t", col = "darkgreen", pch = 16)
+plot(yt_2, yt, main = "Scatterplot Y_t vs Y_{t-2}", xlab = "Y_{t-2}", ylab = "Y_t", col = "darkred", pch = 16)
+plot(yt_3, yt, main = "Scatterplot Y_t vs Y_{t-3}", xlab = "Y_{t-3}", ylab = "Y_t", col = "darkblue", pch = 16)
+par(mfrow = c(1, 1))
+```
+
+
+## 4. PERHITUNGAN AUTOKORELASI (TEORITIS VS BANGKITAN)
+
+```{r}
+# ------------------------------------------------------------------------------
+# 4. PERHITUNGAN AUTOKORELASI (TEORITIS VS BANGKITAN)
+# ------------------------------------------------------------------------------
+
+# A. Nilai Autokorelasi Teoritis (Persamaan Yule-Walker untuk AR(2))
+# rho_0 = 1
+# rho_1 = phi_1 / (1 - phi_2)
+# rho_2 = phi_1 * rho_1 + phi_2
+# rho_3 = phi_1 * rho_2 + phi_2 * rho_1
+
+rho0_teoritis <- 1
+rho1_teoritis <- phi1 / (1 - phi2)
+rho2_teoritis <- (phi1 * rho1_teoritis) + phi2
+rho3_teoritis <- (phi1 * rho2_teoritis) + (phi2 * rho1_teoritis)
+
+# B. Nilai Autokorelasi Data Pembangkitan (Empiris)
+# Penggabungan manual 1 di depan agar urutan lag 0-3 tidak bergeser
+acf_empiris <- c(1, acf(y_sim, plot = FALSE)$acf[1:3])
+
+# Menampilkan Hasil Perbandingan
+tabel_hasil <- data.frame(
+  Lag = c("Lag 0", "Lag 1", "Lag 2", "Lag 3"),
+  Teoritis = c(rho0_teoritis, rho1_teoritis, rho2_teoritis, rho3_teoritis),
+  Empiris = acf_empiris
+)
+
+cat("\n--- PERBANDINGAN AUTOKORELASI ---\n")
+print(tabel_hasil)
+```
+
+**Interpretasi**
+
+1. Stasioneritas & Pola Plot (ACF, PACF, EACF)
+
+* **Plot Time Series:** Data berfluktuasi acak di sekitar rata-rata 0 dan variansnya relatif stabil. Tidak ada tren naik/turun atau pola musiman, artinya **data sudah stasioner**.
+* **Plot PACF:** Terlihat jelas garis memotong (*cut off*) setelah **lag 2** (hanya lag 1 dan lag 2 yang keluar dari garis batas biru). Ini ciri khas utama dari model **AR(2)**.
+* **Plot ACF:** Garis-garisnya meluruh secara perlahan (*tails off*) seiring bertambahnya lag.
+* **Matriks EACF:** Pembentukan segitiga nol (simbol `o`) dimulai tepat pada **baris AR = 2** dan **kolom MA = 0**, yang menegaskan bahwa model tentatif terbaik adalah **AR(2)**.
+
+
+2. Scatterplot
+
+* **$Y_t$ vs $Y_{t-1}$ & $Y_t$ vs $Y_{t-2}$:** Membentuk pola garis lurus miring ke kanan atas (linier positif) yang cukup kuat, menandakan hubungan korelasi yang erat pada lag 1 dan lag 2.
+* **$Y_t$ vs $Y_{t-3}$:** Pola linier masih terlihat namun mulai memudar/melemah sebaran titiknya, sesuai sifat model AR di mana korelasinya perlahan berkurang makin jauh jarak lag-nya.
+
+
+3. Perbandingan Autokorelasi (Teoritis vs Empiris)
+
+* **Lag 0:** Korelasi sempurna bernilai **1.00000** (data terhadap dirinya sendiri).
+* **Lag 1:** Secara teoritis nilainya **0.62500** dan empiris sebesar **0.51367**.
+* **Lag 2:** Secara teoritis nilainya **0.51250** dan empiris sebesar **0.43496**.
+* **Lag 3:** Secara teoritis nilainya **0.38125** dan empiris sebesar **0.30263**.
+
+Kesimpulan:
+Nilai autokorelasi empiris dari data bangkitan ($n = 300$) meluruh secara perlahan mendekati nilai teoritisnya. Adanya sedikit selisih angka antara teoritis dan empiris merupakan hal yang wajar karena pengaruh variasi acak (*sampling error*) saat simulasi data.
+
+
+# PROSES ARMA (2,2)
+
+```{r}
+library(TSA) # Untuk fungsi eacf()
+
+set.seed(123) # Mengunci seed agar hasil simulasi konsisten
+```
+
+## 1. BANGKITKAN MODEL ARMA(2,2)
+
+```{r}
+# ------------------------------------------------------------------------------
+# 1. BANGKITKAN MODEL ARMA(2,2)
+# ------------------------------------------------------------------------------
+# Parameter:
+# phi1 = 0.5, phi2 = 0.2
+# theta1 = 0.4, theta2 = 0.6
+# n = 300
+
+n <- 300
+phi1 <- 0.5
+phi2 <- 0.2
+theta1 <- 0.4
+theta2 <- 0.6
+e <- rnorm(n, mean = 0, sd = 1) # White noise ~ N(0,1)
+
+# A. Pembangkitan Manual
+# Persamaan: Y_t = phi1*Y_{t-1} + phi2*Y_{t-2} + e_t + theta1*e_{t-1} + theta2*e_{t-2}
+y_manual <- numeric(n)
+y_manual[1] <- e[1]
+y_manual[2] <- phi1 * y_manual[1] + e[2] + theta1 * e[1]
+
+for (t in 3:n) {
+  y_manual[t] <- phi1 * y_manual[t - 1] + phi2 * y_manual[t - 2] + 
+                 e[t] + theta1 * e[t - 1] + theta2 * e[t - 2]
+}
+
+# B. Pembangkitan menggunakan fungsi arima.sim()
+y_sim <- arima.sim(model = list(ar = c(phi1, phi2), ma = c(theta1, theta2)), n = n)
+```
+
+
+## 2. PLOT TIME SERIES, ACF, PACF, EACF & IDENTIFIKASI STASIONERITAS
+
+```{r}
+# ------------------------------------------------------------------------------
+# 2. PLOT TIME SERIES, ACF, PACF, EACF & IDENTIFIKASI STASIONERITAS
+# ------------------------------------------------------------------------------
+par(mfrow = c(2, 2))
+
+# Plot Time Series
+plot.ts(y_sim, main = "Plot Time Series ARMA(2,2)", ylab = "Y_t", col = "blue")
+
+# Plot ACF & PACF
+# Pada ARMA(p,q), ACF dan PACF sama-sama meluruh (tails off / dies down)
+acf(y_sim, lag.max = 20, main = "Plot ACF ARMA(2,2)")
+pacf(y_sim, lag.max = 20, main = "Plot PACF ARMA(2,2)")
+
+par(mfrow = c(1, 1))
+
+# Plot EACF (Extended ACF)
+cat("\n--- Extended ACF (EACF) ---\n")
+eacf(y_sim)
+```
+
+## 3. SCATTERPLOT Y_t DENGAN Y_{t-1}, Y_{t-2}, DAN Y_{t-3}
+
+```{r}
+# ------------------------------------------------------------------------------
+# 3. SCATTERPLOT Y_t DENGAN Y_{t-1}, Y_{t-2}, DAN Y_{t-3}
+# ------------------------------------------------------------------------------
+yt   <- y_sim[4:n]
+yt_1 <- y_sim[3:(n-1)]
+yt_2 <- y_sim[2:(n-2)]
+yt_3 <- y_sim[1:(n-3)]
+
+par(mfrow = c(1, 3))
+plot(yt_1, yt, main = "Scatterplot Y_t vs Y_{t-1}", xlab = "Y_{t-1}", ylab = "Y_t", col = "darkgreen", pch = 16)
+plot(yt_2, yt, main = "Scatterplot Y_t vs Y_{t-2}", xlab = "Y_{t-2}", ylab = "Y_t", col = "darkred", pch = 16)
+plot(yt_3, yt, main = "Scatterplot Y_t vs Y_{t-3}", xlab = "Y_{t-3}", ylab = "Y_t", col = "darkblue", pch = 16)
+par(mfrow = c(1, 1))
+```
+
+
+## 4. PERHITUNGAN AUTOKORELASI (TEORITIS VS BANGKITAN)
+
+```{r}
+# ------------------------------------------------------------------------------
+# 4. PERHITUNGAN AUTOKORELASI (TEORITIS VS BANGKITAN)
+# ------------------------------------------------------------------------------
+
+# A. Nilai Autokorelasi Teoritis (menggunakan fungsi ARMAacf)
+# ARMAacf menghitung nilai teoritis tepat berdasarkan parameter phi dan theta
+rho_teoritis <- ARMAacf(ar = c(phi1, phi2), ma = c(theta1, theta2), lag.max = 3)
+
+# B. Nilai Autokorelasi Data Pembangkitan (Empiris)
+acf_empiris <- c(1, acf(y_sim, plot = FALSE)$acf[1:3])
+
+# Tabel Perbandingan
+tabel_hasil <- data.frame(
+  Lag = c("Lag 0", "Lag 1", "Lag 2", "Lag 3"),
+  Teoritis = as.vector(rho_teoritis),
+  Empiris = acf_empiris
+)
+
+cat("\n--- PERBANDINGAN AUTOKORELASI ---\n")
+print(tabel_hasil)
+```
+
+**Interpretasi**
+
+1. Stasioneritas & Pola Plot (ACF, PACF, EACF)
+
+* **Plot Time Series:** Data berfluktuasi secara acak di sekitar rata-rata nol (mean = 0) dengan varians yang konstan. Tidak terlihat tren naik/turun maupun pola musiman, sehingga **data dapat dikatakan stasioner**.
+* **Plot ACF & PACF:** Baik grafik ACF maupun PACF sama-sama meluruh secara perlahan (*tails off/dies down*). Hal ini merupakan ciri khas utama dari gabungan proses **ARMA**.
+* **Matriks EACF:** Pembentukan sudut segitiga bernilai `o` (tidak signifikan) diawali dari puncak pada **baris AR = 2** dan **kolom MA = 2**, yang menegaskan bahwa model tentatif terbaik adalah **ARMA(2,2)**.
+
+
+2. Scatterplot
+
+* **$Y_t$ vs $Y_{t-1}$ & $Y_t$ vs $Y_{t-2}$:** Membentuk pola linier positif (garis miring ke kanan atas) yang sangat rapat dan kuat, menunjukkan adanya keterikatan korelasi yang tinggi pada lag 1 dan lag 2.
+* **$Y_t$ vs $Y_{t-3}$:** Sebaran titik masih menunjukkan pola linier positif, namun garisnya mulai sedikit merenggang/melemah seiring bertambahnya jarak lag.
+
+
+3. Perbandingan Autokorelasi (Teoritis vs Empiris)
+
+* **Lag 0:** Nilainya sempurna bernilai **1.00000** (korelasi data terhadap dirinya sendiri).
+* **Lag 1:** Secara teoritis sebesar **0.85920** dan empiris sebesar **0.80984** (korelasi sangat kuat).
+* **Lag 2:** Secara teoritis sebesar **0.74919** dan empiris sebesar **0.71242**.
+* **Lag 3:** Secara teoritis sebesar **0.54644** dan empiris sebesar **0.47624**.
+
+Kesimpulan:
+Nilai autokorelasi empiris dari data hasil simulasi ($n = 300$) meluruh secara bertahap dan sangat mendekati nilai perhitungan teoritisnya. Selisih angka yang tipis antara teoritis dan empiris merupakan hal yang wajar karena variasi acak (*sampling error*) pada pembangkitan data.
