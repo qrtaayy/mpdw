@@ -1,0 +1,569 @@
+---
+title: "Tugas Pertemuan 6 (Pemodelan ARIMA - Pendugaan Parameter, Diagnostik Model, dan Peramalan)"
+author: "Qurrota A'yunina | M0401241049"
+date: "26 September 2026"
+output:
+  html_document:
+    theme:
+      bg: "#fff5f7"          
+      fg: "#4a1525"          
+      primary: "#ec4899"     
+      base_font: "Nunito"
+    toc: true
+    toc_float: true
+---
+
+## Packages
+
+```{r}
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TSA)
+library(TTR)
+library(aTSA)
+library(graphics)
+library(readxl)
+```
+
+## Data
+
+### Impor Data
+
+```{r}
+# 1. Impor data dari file Excel
+data_sepeda <- read_excel("C://Users//USER//OneDrive//ドキュメント//Mata Kuliah Semester 5//Metode Peramalan Deret Waktu//Data Penyewaan Sepeda (Day) Time Series.xlsx")
+
+# 2. Ubah kolom 'cnt' menjadi objek time series (ts)
+data_ts <- ts(data_sepeda$cnt)
+
+# 3. Pembagian Data Latih (Train) dan Data Uji (Test) 80:20
+n <- length(data_ts)
+n_train <- round(0.80 * n)
+
+data.train <- data_ts[1:n_train]
+data.test  <- data_ts[(n_train + 1):n]
+
+# 4. Menampilkan informasi hasil pembagian
+cat("Total seluruh data :", n, "baris\n")
+cat("Jumlah data latih  :", length(data.train), "baris (80%)\n")
+cat("Jumlah data uji    :", length(data.test), "baris (20%)\n")
+```
+
+## Eksplorasi Data
+
+### Plot Data Penuh
+
+```{r}
+# Plot seluruh data time series (cnt)
+plot.ts(data_ts, 
+        lty = 1, 
+        col = "navyblue",
+        xlab = "Waktu / Indeks Hari", 
+        ylab = "Jumlah Penyewaan Sepeda (cnt)", 
+        main = "Plot Data Penyewaan Sepeda Penuh")
+```
+
+
+Berdasarkan plot data deret waktu di atas, terlihat bahwa data penyewaan sepeda secara keseluruhan memiliki kecenderungan tren yang meningkat (*upward trend*) serta fluktuasi/pola musiman. Jumlah penyewaan sepeda mengalami peningkatan secara bertahap dari periode awal (indeks hari 0 hingga sekitar 200), kemudian mengalami penurunan di pertengahan waktu (indeks hari 300–400), dan kembali melonjak hingga mencapai puncaknya (melebihi 6.000 penyewaan) pada indeks hari 400–600 sebelum akhirnya sedikit menurun di bagian akhir periode observasi. Berdasarkan pola data tersebut, pembagian data latih (*training data*) dan data uji (*testing data*) ditetapkan dengan proporsi **80% : 20%**.
+
+### Plot Data Latih
+
+```{r}
+# Plot data latih penyewaan sepeda
+plot.ts(data.train, 
+        lty = 1, 
+        col = "navyblue", 
+        xlab = "Waktu / Indeks Hari", 
+        ylab = "Jumlah Penyewaan Sepeda (cnt)", 
+        main = "Plot Data Latih Penyewaan Sepeda")
+```
+
+
+Berdasarkan plot data deret waktu pada data latih di atas, terlihat bahwa data penyewaan sepeda cenderung memiliki tren yang meningkat secara keseluruhan dan tidak bergerak di sekitar nilai tengah (*mean*) tertentu. Pergerakan data diawali dengan tren naik dari indeks waktu 0 hingga sekitar 200, mengalami penurunan pada periode pertengahan (indeks 300–400), lalu mengalami peningkatan signifikan hingga mencapai nilai di atas 8.000 pada indeks waktu setelah 400. Pola ini mengindikasikan secara visual bahwa data latih **belum stasioner dalam rataan**.
+
+
+### Plot Data Uji
+
+```{r}
+# Plot data uji penyewaan sepeda
+plot.ts(data.test, 
+        lty = 1, 
+        col = "navyblue", 
+        xlab = "Waktu / Indeks Hari", 
+        ylab = "Jumlah Penyewaan Sepeda (cnt)", 
+        main = "Plot Data Uji Penyewaan Sepeda")
+```
+
+
+Berdasarkan plot data uji di atas, terlihat gambaran pergerakan jumlah penyewaan sepeda pada 20% periode akhir pengamatan (sekitar 146 observasi harian). Pola data uji diawali dengan fluktuasi yang relatif tinggi pada kisaran nilai 6.000 hingga mendekati 8.000 penyewaan, sempat mengalami penurunan tajam yang signifikan pada sekitar indeks hari ke-80, lalu cenderung menunjukkan pola tren menurun hingga bagian akhir periode data. Data uji ini disisihkan dan tidak digunakan dalam proses identifikasi maupun estimasi parameter model, melainkan murni diperuntukkan bagi tahap evaluasi akurasi hasil peramalan (*out-of-sample forecasting*) model ARIMA terbaik nantinya.
+
+
+## Uji Stasioneritas Data
+
+### Plot ACF
+
+```{r}
+acf(data.train)
+```
+
+
+Berdasarkan plot ACF di atas, terlihat bahwa nilai autokorelasi meluruh atau menurun secara sangat perlahan (*slowly tailing off*) dan nilainya masih berada jauh di luar garis batas selang kepercayaan (garis biru putus-putus) bahkan hingga *lag* yang tinggi (*lag* ke-25 lebih). Pola meluruh lambat pada plot ACF ini mengonfirmasi bahwa data latih penyewaan sepeda **belum stasioner dalam rataan**. Oleh karena itu, data memerlukan proses pembedaan (*differencing*) pada tahap berikutnya agar diperoleh data yang stasioner dalam rataan.
+
+
+### Uji ADF
+
+```{r}
+tseries::adf.test(data.train)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.3216 yang
+lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan
+bahwa data tidak stasioner dalam rataan. Hal ini sesuai dengan hasil
+eksplorasi menggunakan plot time series dan plot ACF, sehingga
+ketidakstasioneran model kedepannya harus ditangani.
+
+
+### Plot Box-Cox
+
+```{r}
+#--CEK KESTASIONERAN RAGAM (BOX-COX)--#
+library(MASS)
+
+# Buat indeks berdasarkan panjang data latih
+index <- seq_len(length(data.train))
+
+# Uji Box-Cox
+bc <- boxcox(
+  data.train ~ index,
+  lambda = seq(-2, 3, by = 0.1)
+)
+
+# Nilai lambda optimum
+lambda <- bc$x[which.max(bc$y)]
+cat("Lambda optimum:", lambda, "\n")
+
+# Selang kepercayaan 95% untuk lambda
+ci_lambda <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, 1)]
+
+# Batas bawah dan batas atas
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+c(Batas_Bawah = ci_lower, Batas_Atas = ci_upper)
+```
+
+
+Gambar di atas menunjukkan nilai $\lambda$ optimum sebesar **0,93** (atau 0,929) dan pada selang kepercayaan 95% nilai $\lambda$ memiliki batas bawah **0,83** (atau 0,828) dan batas atas **1,03** (atau 1,030). Karena selang kepercayaan tersebut **memuat nilai satu** ($\lambda = 1$), maka dapat disimpulkan bahwa data latih **stasioner dalam ragam** dan tidak memerlukan proses transformasi.
+
+
+## Penanganan Ketidakstasioneran Data
+
+Karena data latih belum stasioner dalam **rataan**, dilakukan proses pembedaan (*differencing*) tingkat pertama ($d=1$) untuk menghilangkan pola tren[cite: 4, 8].
+
+```{r}
+# 1. Differencing pertama pada data latih
+data.train.diff <- diff(data.train, differences = 1)
+
+# 2. Plot hasil differencing
+plot.ts(data.train.diff, 
+        lty = 1, 
+        col = "navyblue",
+        xlab = "Waktu / Indeks Hari", 
+        ylab = "D1 Jumlah Penyewaan Sepeda", 
+        main = "Plot Hasil Differencing Pertama (d=1)")
+```
+
+
+Berdasarkan plot deret waktu hasil diferensiasi tingkat pertama ($d=1$) di atas, terlihat bahwa data kini sudah bergerak secara acak memotong nilai tengah sekitar nol ($0$) dan pola tren naik-turun yang sebelumnya ada sudah hilang. Selain itu, lebar pita/fluktuasi data secara umum relatif stabil sepanjang periode waktu (0 hingga 585). Pola ini mengindikasikan secara visual bahwa data latih penyewaan sepeda **sudah stasioner dalam rataan**. Selanjutnya, kestasioneran ini akan dikonfirmasi secara formal melalui plot ACF dan uji Augmented Dickey-Fuller (ADF) pada data hasil diferensiasi.
+
+
+### Plot ACF
+
+```{r}
+acf(data.train.diff, main = "Plot ACF Data Latih Difference 1", lag.max = 30)
+```
+
+
+Berdasarkan plot ACF dari data latih hasil pembedaan pertama ($d=1$) di atas, terlihat bahwa nilai autokorelasi tidak lagi meluruh secara perlahan (*slowly tailing off*), melainkan langsung turun dan berada di sekitar nilai nol. Sebagian besar garis *lag* berada di dalam selang kepercayaan (garis biru putus-putus). Pola ini mengonfirmasi secara visual bahwa data latih **sudah stasioner dalam rataan** setelah dilakukan *differencing* orde 1 ($d=1$).
+
+
+### Uji ADF
+
+```{r}
+tseries::adf.test(data.train.diff)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.01 yang lebih
+kecil dari taraf nyata 5% sehingga tolak $H_0$ atau data stasioner dalam
+rataan. Hal ini sesuai dengan hasil eksplorasi menggunakan plot time
+series dan plot ACF, sehingga dalam hal ini ketidakstasioneran data
+sudah berhasil ditangani dan dapat dilanjutkan ke pemodelan.
+
+
+## Identifikasi Model
+
+### Plot ACF
+
+```{r}
+acf(data.train.diff)
+```
+
+Berdasarkan plot tersebut, terlihat bahwa plot ACF cenderung *cuts off* pada lag ke-1 (dan lag ke-2), sehingga jika plot PACF dianggap *tails off*, maka model tentatifnya adalah **ARIMA(0,1,1)** dan **ARIMA(0,1,2)**.
+
+### Plot PACF
+
+```{r}
+pacf(data.train.diff)
+```
+
+Berdasarkan plot tersebut, terlihat bahwa plot PACF cenderung *tails off* (meluruh secara perlahan). Namun, jika diposisikan *cuts off* pada lag ke-1 atau lag ke-2, maka model tentatifnya adalah **ARIMA(1,1,0)** dan **ARIMA(2,1,0)**.
+
+Jika baik plot ACF maupun plot PACF keduanya dianggap *tails off*, maka model tentatif yang terbentuk adalah **ARIMA(1,1,1)**.
+
+### Plot EACF
+
+```{r}
+eacf(data.train.diff)
+```
+
+Identifikasi model menggunakan plot EACF dilakukan dengan melihat sudut kiri atas dari pola segitiga angka nol (`o`). Dalam hal ini, model tentatif yang terbentuk adalah **ARIMA(0,1,2)**, **ARIMA(1,1,2)**, dan **ARIMA(2,1,2)**.
+
+
+Sehingga gabungan seluruh kandidat model tentatif yang akan diestimasi parameternya pada tahap berikutnya adalah:
+
+1. **ARIMA(0,1,1)**
+2. **ARIMA(0,1,2)**
+3. **ARIMA(1,1,0)**
+4. **ARIMA(2,1,0)**
+5. **ARIMA(1,1,1)**
+6. **ARIMA(1,1,2)**
+7. **ARIMA(2,1,2)**
+
+
+## Pendugaan Parameter Model Tentatif
+
+### ARIMA(0,1,1)
+
+```{r}
+model1.da=Arima(data.train.diff, order=c(0,0,1),method="ML")
+summary(model1.da) 
+lmtest::coeftest(model1.da)
+```
+
+### ARIMA (0,1,2)
+
+```{r}
+model2.da=Arima(data.train.diff, order=c(0,0,2),method="ML")
+summary(model2.da) 
+lmtest::coeftest(model2.da)
+```
+
+### ARIMA (1,1,0)
+
+```{r}
+model3.da=Arima(data.train.diff, order=c(1,0,0),method="ML")
+summary(model3.da) 
+lmtest::coeftest(model3.da)
+```
+
+### ARIMA (2,1,0)
+
+```{r}
+model4.da=Arima(data.train.diff, order=c(2,0,0),method="ML")
+summary(model4.da) 
+lmtest::coeftest(model4.da)
+```
+
+### ARIMA (1,1,1)
+
+```{r}
+model5.da=Arima(data.train.diff, order=c(1,0,1),method="ML")
+summary(model5.da) 
+lmtest::coeftest(model5.da)
+```
+
+
+### ARIMA (1,1,2)
+
+```{r}
+model6.da=Arima(data.train.diff, order=c(1,0,2),method="ML")
+summary(model6.da) 
+lmtest::coeftest(model6.da)
+```
+
+
+### ARIMA (2,1,2)
+
+```{r}
+model7.da=Arima(data.train.diff, order=c(2,0,2),method="ML")
+summary(model7.da) 
+lmtest::coeftest(model7.da)
+```
+
+## Ringkasan AIC
+
+```{r}
+# Membuat data frame perbandingan AIC dan BIC untuk 7 model tentatif
+model_tentatif <- data.frame(
+  Model = c("ARIMA(0,1,1)", "ARIMA(0,1,2)", "ARIMA(1,1,0)", "ARIMA(2,1,0)", 
+            "ARIMA(1,1,1)", "ARIMA(1,1,2)", "ARIMA(2,1,2)"),
+  AIC   = c(AIC(model1.da), AIC(model2.da), AIC(model3.da), AIC(model4.da), 
+            AIC(model5.da), AIC(model6.da), AIC(model7.da)),
+  BIC   = c(BIC(model1.da), BIC(model2.da), BIC(model3.da), BIC(model4.da), 
+            BIC(model5.da), BIC(model6.da), BIC(model7.da))
+)
+
+# Menampilkan tabel perbandingan
+model_tentatif
+```
+
+
+Berdasarkan pendugaan parameter di atas, nilai AIC terkecil dimiliki
+oleh model ARIMA(2,1,2) dan parameter model ARIMA(2,1,2) juga seluruhnya signifikan sehingga model yang dipilih adalah model ARIMA(2,1,2).
+
+
+## Analisis Sisaan
+
+Model terbaik hasil identifikasi kemudian dicek asumsi sisaannya. Sisaan model ARIMA harus memenuhi asumsi normalitas, kebebasan sisaan, dan kehomogenan ragam. Diagnostik model dilakukan secara eksplorasi dan uji formal.
+
+### Eksplorasi Sisaan
+
+```{r}
+sisaan.da <- model7.da$residuals
+
+par(mfrow = c(2,2),    
+    mar = c(4,4,2,1),  
+    oma = c(0,0,2,0))  
+
+# Q-Q Plot
+qqnorm(sisaan.da, main = "Normal Q-Q Plot")
+qqline(sisaan.da, col = "blue", lwd = 2)
+
+# Plot Sisaan vs Waktu
+plot(sisaan.da, type = "p",
+     main = "Plot Sisaan vs Waktu",
+     xlab = "Waktu", ylab = "Sisaan")
+
+# ACF
+acf(sisaan.da, main = "ACF Sisaan")
+
+# PACF
+pacf(sisaan.da, main = "PACF Sisaan")
+
+```
+
+
+Berdasarkan plot kuantil-kuantil normal, secara eksploratif terlihat bahwa sisaan tidak sepenuhnya menyebar normal karena titik-titik cenderung menyimpang dari garis $45^\circ$, terutama pada bagian ekor. Selain itu, lebar pita sebaran sisaan tampak tidak seragam, yang mengindikasikan adanya heterogenitas ragam. Sementara itu, plot ACF dan PACF sisaan menunjukkan bahwa sebagian besar lag berada di dalam batas selang kepercayaan, meskipun terdapat *spike* signifikan pada lag ke-6, sehingga secara visual sisaan dapat dianggap cenderung saling bebas. Kondisi ini akan diuji lebih lanjut dengan uji formal.
+
+
+### Uji Formal
+
+```{r}
+#1) Sisaan Menyebar Normal 
+ks.test(sisaan.da,"pnorm")  #gagal tolak H0 > sisaan menyebar normal
+```
+
+Selain dengan eksplorasi, asumsi tersebut dapat diuji menggunakan uji
+formal. Pada tahapan ini uji formal yang digunakan untuk normalitas
+adalah uji Kolmogorov-Smirnov (KS). Hipotesis pada uji KS adalah sebagai
+berikut.
+
+$H_0$ : Sisaan menyebar normal
+
+$H_1$ : Sisaan tidak menyebar normal
+
+Berdasarkan uji KS tersebut, didapat *p-value* sebesar 0.00 (2.2e-16) yang kurang
+dari taraf nyata 5% sehingga tolak $H_0$ dan menandakan bahwa sisaan
+tidak menyebar normal. Hal ini berbeda dengan hasil eksplorasi
+menggunakan plot kuantil-kuantil normal.
+
+```{r}
+#2) Sisaan saling bebas/tidak ada autokorelasi 
+Box.test(sisaan.da, type = "Ljung")  #gagal tolak H0 > sisaan saling bebas
+```
+
+Selanjutnya akan dilakukan uji formal untuk kebebasan sisaan menggunakan
+uji Ljung-Box. Hipotesis yang digunakan adalah sebagai berikut.
+
+$H_0$ : Sisaan saling bebas
+
+$H_1$ : Sisaan tidak tidak saling bebas
+
+Berdasarkan uji Ljung-Box tersebut, didapat *p-value* sebesar 0.9751
+yang lebih besar dari taraf nyata 5% sehingga gagal tolak $H_0$ dan
+menandakan bahwa sisaan saling bebas. Hal ini sesuai dengan eksplorasi.
+
+```{r}
+#3) Sisaan homogen 
+Box.test((sisaan.da)^2, type = "Ljung")  #gagal tolak H0 > sisaan homogen
+```
+
+Hipotesis yang digunakan untuk uji kehomogenan ragam adalah sebagai
+berikut.
+
+$H_0$ : Ragam sisaan homogen
+
+$H_1$ : Ragam sisaan tidak homogen
+
+Berdasarkan uji Ljung-Box terhadap sisaan kuadrat tersebut, didapat
+*p-value* sebesar 0.09394 yang lebih dari taraf nyata 5% sehingga gagal tolak $H_0$ dan menandakan bahwa ragam sisaan homogen.
+
+```{r}
+#4) Nilai tengah sisaan sama dengan nol 
+t.test(sisaan.da, mu = 0, conf.level = 0.95)  #gagal tolak h0 > nilai tengah sisaan sama dengan 0
+```
+
+Terakhir, dengan uji-t, akan dicek apakah nilai tengah sisaan sama
+dengan nol. Hipotesis yang diujikan sebagai berikut.
+
+$H_0$ : nilai tengah sisaan sama dengan 0
+
+$H_1$ : nilai tengah sisaan tidak sama dengan 0
+
+Berdasarkan uji-ttersebut, didapat *p-value* sebesar 0.9805 yang lebih
+besar dari taraf nyata 5% sehingga gagal tolak $H_0$ dan menandakan
+bahwa nilai tengah sisaan sama dengan nol. Hal ini sesuai dengan
+eksplorasi.
+
+
+## Overfitting
+
+Tahapan selanjutnya adalah *overfitting* dilakukan dengan menaikkan orde
+AR(p) dan MA(q) dari model ARIMA(2,1,2) Kandidat model *overfitting*
+adalah ARIMA(3,1,2) dan ARIMA(2,1,3). 
+
+```{r}
+# Model Overfitting 1: ARIMA(3,1,2)
+model_over1 <- Arima(data.train.diff, order = c(3,0,2), method = "ML")
+summary(model_over1)
+lmtest::coeftest(model_over1)
+
+# Model Overfitting 2: ARIMA(2,1,3)
+model_over2 <- Arima(data.train.diff, order = c(2,0,3), method = "ML")
+summary(model_over2)
+lmtest::coeftest(model_over2)
+```
+
+```{r}
+# Coba tambahkan include.mean = FALSE dan method = "CSS-ML"
+model_over1 <- Arima(data.train.diff, order = c(3,0,2), include.mean = FALSE, method = "CSS-ML")
+summary(model_over1)
+lmtest::coeftest(model_over1)
+
+# Overfitting pada komponen MA (q dinaikkan jadi 3)
+model_over2 <- Arima(data.train.diff, order = c(2,0,3), include.mean = FALSE, method = "CSS-ML")
+summary(model_over2)
+lmtest::coeftest(model_over2)
+```
+
+1. **Model Overfitting 1: ARIMA(3,1,2)** (Model `ARIMA(3,0,2)` pada `data.train.diff`)
+* **Parameter Tidak Signifikan**: Parameter `ar3` ($p\text{-value} = 0.087 > 0.05$) dan `ma1` ($p\text{-value} = 0.865 > 0.05$) **tidak signifikan** secara statistik.
+* **AIC**: Nilai AIC-nya adalah **9538.46**.
+
+
+2. **Model Overfitting 2: ARIMA(2,1,3)** (Model `ARIMA(2,0,3)` pada `data.train.diff`)
+* **Muncul `NaN**`: Terjadi *over-parameterization* yang menyebabkan matriks ragam-peragam tidak positif definit (sehingga standar eror bernilai `NaN`).
+* **AIC**: Nilai AIC-nya adalah **9540.86** (lebih besar/lebih buruk dari ARIMA(3,1,2)).
+
+
+Karena kedua model hasil *overfitting* tidak menghasilkan parameter yang signifikan dan tidak memperbaiki performa model, maka model **ARIMA(2,1,2)** tetap dipilih sebagai **model terbaik akhir** untuk dilanjutkan ke tahap peramalan (*forecasting*).
+
+
+## Model Terbaik : ARIMA(2,1,2)
+
+```{r}
+model7.da=Arima(data.train.diff, order=c(2,0,2),method="ML")
+summary(model7.da)
+lmtest::coeftest(model7.da)
+```
+
+## Peramalan
+
+Peramalan dilakukan menggunakan fungsi `forecast()` . Contoh peramalan
+berikut ini dilakukan untuk 30 hari ke depan.
+
+```{r}
+# ---FORECAST---
+ramalan.da <- forecast::forecast(model7.da, h = length(data.test))
+```
+
+```{r}
+data.ramalan.da <- ramalan.da$mean
+plot(ramalan.da)
+```
+
+
+```{r}
+# 1. Melakukan peramalan data diferensiasi menggunakan model terbaik ARIMA(2,1,2)
+ramalan_diff <- forecast::forecast(model7.da, h = length(data.test))
+data.ramalan.da <- ramalan_diff$mean
+
+# 2. Inverse Differencing (Mengembalikan skala ke data penyewaan sepeda asli)
+pt_akhir_train <- tail(data.train, 1)
+
+forecast_inv <- diffinv(data.ramalan.da, differences = 1, xi = pt_akhir_train)
+
+# Membuang elemen pertama (xi) agar panjang vektor 'hasil' pas dengan data.test
+hasil <- forecast_inv[-1]
+
+# 3. Membandingkan data Aktual vs Hasil Peramalan (Forecast)
+perbandingan.da <- cbind(
+  Aktual   = data.test,
+  Forecast = hasil
+)
+
+# Menampilkan 10 baris pertama tabel perbandingan
+print(head(perbandingan.da, 10))   
+
+# 4. Menghitung ukuran keakuratan peramalan (RMSE, MAE, MAPE)
+akurasi_test <- forecast::accuracy(hasil, data.test)
+akurasi_test
+```
+
+
+```{r}
+# 1. Plot seluruh data aktual penyewaan sepeda
+plot.ts(data_ts, 
+        col = "navyblue", 
+        lty = 1,
+        xlab = "Waktu / Indeks Hari", 
+        ylab = "Jumlah Penyewaan Sepeda (cnt)",
+        main = "Plot Peramalan ARIMA(2,1,2) vs Data Aktual")
+
+# 2. Menambahkan garis hasil forecast (dimulai dari hari setelah data latih selesai)
+# Data latih sebanyak n_train baris (585 hari), forecast dimulai dari hari ke-586 sampai akhir
+lines((n_train + 1):n, hasil, col = "red", lty = 2, lwd = 2)
+
+# 3. Menambahkan legenda
+legend("topleft", 
+       legend = c("Data Aktual", "Forecast ARIMA(2,1,2)"),
+       col = c("navyblue", "red"),
+       lty = c(1, 2), 
+       lwd = c(1, 2), 
+       bty = "n")
+```
+
+
+Berdasarkan plot peramalan di atas, dilakukan evaluasi visual terhadap hasil ramalan model ARIMA(2,1,2) dibandingkan dengan data aktual penyewaan sepeda:
+
+1. **Kesesuaian Rentang Waktu**: Garis merah putus-putus (*Forecast*) berhasil melanjutkan pola data dari titik akhir data latih (sekitar hari ke-585) hingga hari terakhir data uji (hari ke-731).
+
+
+2. **Pola Tren Ramalan**: Hasil peramalan dari model ARIMA(2,1,2) menunjukkan tren linier yang cenderung meningkat secara konstan (*upward trend*).
+
+
+3. **Keterbatasan Model Non-Musiman**: Karakteristik garis ramalan yang cenderung lurus ini terjadi karena ARIMA(2,1,2) merupakan **model non-musiman**. Model ini hanya menangkap komponen tren lokal di akhir data latih, namun belum mampu menangkap fluktuasi pola musiman (*seasonality*) serta penurunan tajam yang terjadi pada data aktual di periode data uji.
+
+
+4. **Kesimpulan Peramalan**: Meskipun belum mampu mengikuti gelombang musiman harian secara presisi, model ARIMA(2,1,2) tetap mampu memberikan gambaran tren umum (*general direction*) pergerakan penyewaan sepeda untuk jangka menengah.
